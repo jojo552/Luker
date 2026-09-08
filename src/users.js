@@ -72,6 +72,14 @@ const TRUSTED_PROXIES = filterValidIpPatterns(getConfigValue('sso.trustedProxies
 const DIRECTORIES_CACHE = new Map();
 const HOUR_IN_MILLISECONDS = 60 * 60 * 1000;
 let INACTIVE_USER_CLEANUP_TIMER = null;
+const USER_ACTIVITY_FLUSH_INTERVAL_MS = 5 * 1000;
+/** @type {Map<string, number>} */
+const PENDING_USER_ACTIVITY = new Map();
+/** @type {Map<string, Promise<unknown>>} */
+const USER_ACTIVITY_WRITE_QUEUES = new Map();
+let USER_ACTIVITY_FLUSH_TIMER = null;
+/** @type {Promise<void>|null} */
+let USER_ACTIVITY_FLUSH_PROMISE = null;
 const PUBLIC_USER_AVATAR = '/img/user-default.png';
 const COOKIE_SECRET_PATH = 'cookie-secret.txt';
 
@@ -689,26 +697,138 @@ export async function initializeUserActivity() {
 }
 
 /**
- * 更新用户的最后活动时间。每个已认证请求都会立即持久化，保证清理依据接近实时。
- * @param {User} user 当前用户
+ * 将同一用户的活动写入串行化，避免登录记录和后台活动刷新互相覆盖。
+ * @param {string} handle 用户名
+ * @param {() => Promise<unknown>} operation 写入操作
+ * @returns {Promise<unknown>}
+ */
+function enqueueUserActivityWrite(handle, operation) {
+    const previous = USER_ACTIVITY_WRITE_QUEUES.get(handle) ?? Promise.resolve();
+    const current = previous.catch(() => {}).then(operation);
+    USER_ACTIVITY_WRITE_QUEUES.set(handle, current);
+
+    return current.finally(() => {
+        if (USER_ACTIVITY_WRITE_QUEUES.get(handle) === current) {
+            USER_ACTIVITY_WRITE_QUEUES.delete(handle);
+        }
+    });
+}
+
+/**
+ * 安排一次后台活动时间刷新。短时间内的多个请求会合并成一次磁盘写入。
+ * @returns {void}
+ */
+function scheduleUserActivityFlush() {
+    if (USER_ACTIVITY_FLUSH_TIMER || USER_ACTIVITY_FLUSH_PROMISE || PENDING_USER_ACTIVITY.size === 0) {
+        return;
+    }
+
+    USER_ACTIVITY_FLUSH_TIMER = setTimeout(() => {
+        USER_ACTIVITY_FLUSH_TIMER = null;
+        void flushUserActivity().catch(error => {
+            console.warn('[inactive-user-cleanup] activity flush failed:', error);
+        });
+    }, USER_ACTIVITY_FLUSH_INTERVAL_MS);
+    USER_ACTIVITY_FLUSH_TIMER.unref?.();
+}
+
+/**
+ * 立即刷新待持久化的活动时间。清理任务会调用此函数，确保不会误删刚刚活跃的用户。
  * @returns {Promise<void>}
  */
-export async function touchUserActivity(user) {
+export async function flushUserActivity() {
+    if (USER_ACTIVITY_FLUSH_TIMER) {
+        clearTimeout(USER_ACTIVITY_FLUSH_TIMER);
+        USER_ACTIVITY_FLUSH_TIMER = null;
+    }
+
+    if (USER_ACTIVITY_FLUSH_PROMISE) {
+        return USER_ACTIVITY_FLUSH_PROMISE;
+    }
+
+    const updates = new Map(PENDING_USER_ACTIVITY);
+    PENDING_USER_ACTIVITY.clear();
+    if (updates.size === 0) {
+        return;
+    }
+
+    const flushPromise = (async () => {
+        await Promise.all([...updates].map(async ([handle, activityTimestamp]) => {
+            try {
+                await enqueueUserActivityWrite(handle, async () => {
+                    const latest = await storage.getItem(toKey(handle));
+                    if (!latest) {
+                        const pendingTimestamp = PENDING_USER_ACTIVITY.get(handle);
+                        if (pendingTimestamp !== undefined && pendingTimestamp <= activityTimestamp) {
+                            PENDING_USER_ACTIVITY.delete(handle);
+                        }
+                        return;
+                    }
+
+                    const persistedTimestamp = Number(latest.lastActivity);
+                    const nextTimestamp = Math.max(
+                        Number.isFinite(persistedTimestamp) ? persistedTimestamp : 0,
+                        activityTimestamp,
+                    );
+
+                    if (nextTimestamp > (Number.isFinite(persistedTimestamp) ? persistedTimestamp : 0)) {
+                        await storage.setItem(toKey(handle), { ...latest, lastActivity: nextTimestamp });
+                    }
+
+                    const pendingTimestamp = PENDING_USER_ACTIVITY.get(handle);
+                    if (pendingTimestamp !== undefined && pendingTimestamp <= nextTimestamp) {
+                        PENDING_USER_ACTIVITY.delete(handle);
+                    }
+                });
+            } catch (error) {
+                const pendingTimestamp = PENDING_USER_ACTIVITY.get(handle) ?? 0;
+                PENDING_USER_ACTIVITY.set(handle, Math.max(pendingTimestamp, activityTimestamp));
+                console.warn(`[inactive-user-cleanup] failed to persist activity for ${handle}:`, error);
+            }
+        }));
+    })();
+
+    USER_ACTIVITY_FLUSH_PROMISE = flushPromise;
+    try {
+        await flushPromise;
+    } finally {
+        if (USER_ACTIVITY_FLUSH_PROMISE === flushPromise) {
+            USER_ACTIVITY_FLUSH_PROMISE = null;
+        }
+        scheduleUserActivityFlush();
+    }
+}
+
+/**
+ * 获取用户当前已知的活动时间，包含尚未落盘的内存时间。
+ * @param {string} handle 用户名
+ * @param {number|undefined} persistedTimestamp 已持久化的时间
+ * @returns {number|undefined} 最新活动时间
+ */
+export function getLatestUserActivity(handle, persistedTimestamp) {
+    const pendingTimestamp = PENDING_USER_ACTIVITY.get(handle);
+    if (pendingTimestamp === undefined) {
+        return persistedTimestamp;
+    }
+
+    const persisted = Number(persistedTimestamp);
+    return pendingTimestamp > (Number.isFinite(persisted) ? persisted : 0) ? pendingTimestamp : persistedTimestamp;
+}
+
+/**
+ * 更新用户的最后活动时间。请求路径只更新内存，不等待磁盘写入；后台会合并刷新。
+ * @param {User} user 当前用户
+ * @returns {void}
+ */
+export function touchUserActivity(user) {
     if (!ENABLE_ACCOUNTS || !user?.handle) {
         return;
     }
 
     const now = Date.now();
-    try {
-        const latest = await storage.getItem(toKey(user.handle));
-        if (!latest) {
-            return;
-        }
-
-        await storage.setItem(toKey(user.handle), { ...latest, lastActivity: now });
-    } catch (error) {
-        console.warn(`[inactive-user-cleanup] failed to update activity for ${user.handle}:`, error);
-    }
+    const previous = PENDING_USER_ACTIVITY.get(user.handle) ?? 0;
+    PENDING_USER_ACTIVITY.set(user.handle, Math.max(previous, now));
+    scheduleUserActivityFlush();
 }
 
 /**
@@ -723,12 +843,26 @@ export async function recordUserLogin(user) {
 
     const now = Date.now();
     try {
-        const latest = await storage.getItem(toKey(user.handle));
-        if (!latest) {
-            return;
-        }
+        await enqueueUserActivityWrite(user.handle, async () => {
+            const latest = await storage.getItem(toKey(user.handle));
+            if (!latest) {
+                return;
+            }
 
-        await storage.setItem(toKey(user.handle), { ...latest, lastLogin: now, lastActivity: now });
+            const persistedTimestamp = Number(latest.lastActivity);
+            const pendingTimestamp = PENDING_USER_ACTIVITY.get(user.handle) ?? 0;
+            const nextTimestamp = Math.max(
+                now,
+                Number.isFinite(persistedTimestamp) ? persistedTimestamp : 0,
+                pendingTimestamp,
+            );
+            await storage.setItem(toKey(user.handle), { ...latest, lastLogin: now, lastActivity: nextTimestamp });
+
+            const latestPendingTimestamp = PENDING_USER_ACTIVITY.get(user.handle);
+            if (latestPendingTimestamp !== undefined && latestPendingTimestamp <= nextTimestamp) {
+                PENDING_USER_ACTIVITY.delete(user.handle);
+            }
+        });
     } catch (error) {
         console.warn(`[inactive-user-cleanup] failed to record login for ${user.handle}:`, error);
     }
@@ -757,8 +891,13 @@ export async function runInactiveUserCleanup(now = Date.now()) {
         return 0;
     }
 
+    await flushUserActivity();
     const users = await storage.values(x => x.key.startsWith(KEY_PREFIX));
-    const inactiveUsers = selectInactiveUsers(users, {
+    const usersWithLatestActivity = users.map(user => ({
+        ...user,
+        lastActivity: getLatestUserActivity(user.handle, user.lastActivity),
+    }));
+    const inactiveUsers = selectInactiveUsers(usersWithLatestActivity, {
         now,
         inactivityDays: settings.inactivityDays,
         defaultHandle: DEFAULT_USER.handle,
@@ -1310,7 +1449,7 @@ export async function setUserDataMiddleware(request, response, next) {
         directories: directories,
     };
 
-    await touchUserActivity(user);
+    touchUserActivity(user);
 
     // Touch the session if loading the home page
     if (request.method === 'GET' && request.path === '/') {

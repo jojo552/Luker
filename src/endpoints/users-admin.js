@@ -25,6 +25,7 @@ import {
     getUserDirectories,
     ensurePublicDirectoriesExist,
     restartInactiveUserCleanup,
+    getLatestUserActivity,
 } from '../users.js';
 import {
     resolvePath,
@@ -311,7 +312,7 @@ router.post('/overview', requireAdminMiddleware, async (_request, response) => {
                 password: Boolean(user.password),
                 created: user.created,
                 lastLogin: user.lastLogin,
-                lastActivity: user.lastActivity,
+                lastActivity: getLatestUserActivity(user.handle, user.lastActivity),
                 storageBytes: storageBytes,
                 storageQuotaBytes: effectiveQuotaBytes,
                 storageUsageRatio: effectiveQuotaBytes >= 0 ? storageBytes / Math.max(effectiveQuotaBytes, 1) : null,
@@ -775,7 +776,7 @@ router.post('/get', requireAdminMiddleware, async (_request, response) => {
                         enabled: user.enabled,
                         created: user.created,
                         lastLogin: user.lastLogin,
-                        lastActivity: user.lastActivity,
+                        lastActivity: getLatestUserActivity(user.handle, user.lastActivity),
                         password: !!user.password,
                         storageQuotaBytes: Number.isFinite(Number(user.storageQuotaBytes)) ? Number(user.storageQuotaBytes) : null,
                         oauthProviders: Object.keys(user.oauth || {}),
