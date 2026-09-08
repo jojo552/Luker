@@ -3198,6 +3198,7 @@ async function openAdminPanel() {
             userBlock.find('.hasPassword').toggle(user.password);
             userBlock.find('.noPassword').toggle(!user.password);
             userBlock.find('.userCreated').text(new Date(user.created).toLocaleString());
+            userBlock.find('.userLastLogin').text(user.lastLogin ? new Date(user.lastLogin).toLocaleString() : t`Unknown`);
             userBlock.find('.userLastActivity').text(user.lastActivity ? new Date(user.lastActivity).toLocaleString() : t`Never recorded`);
             userBlock.find('.userEnableButton').toggle(!user.enabled).on('click', () => enableUser(user.handle, renderUsers));
             userBlock.find('.userDisableButton').toggle(user.enabled).on('click', () => disableUser(user.handle, renderUsers));

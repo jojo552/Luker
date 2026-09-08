@@ -70,9 +70,7 @@ const TRUSTED_PROXIES = filterValidIpPatterns(getConfigValue('sso.trustedProxies
  * @type {Map<string, UserDirectoryList>}
  */
 const DIRECTORIES_CACHE = new Map();
-const USER_ACTIVITY_TOUCHES = new Map();
 const HOUR_IN_MILLISECONDS = 60 * 60 * 1000;
-const USER_ACTIVITY_TOUCH_INTERVAL_MS = Math.max(1, Math.floor(getConfigValue('inactiveUserCleanup.activityTouchIntervalHours', 24, 'number'))) * HOUR_IN_MILLISECONDS;
 let INACTIVE_USER_CLEANUP_TIMER = null;
 const PUBLIC_USER_AVATAR = '/img/user-default.png';
 const COOKIE_SECRET_PATH = 'cookie-secret.txt';
@@ -107,6 +105,7 @@ export const USER_BACKUP_SELECTION_DEFAULTS = Object.freeze({
  * @property {string} salt - Salt used for hashing the password
  * @property {boolean} enabled - Whether the user is enabled
  * @property {boolean} admin - Whether the user is an admin (can manage other users)
+ * @property {number} [lastLogin] - The timestamp when the user last logged in
  * @property {number} [lastActivity] - The timestamp when the user last accessed the server
  */
 
@@ -120,6 +119,8 @@ export const USER_BACKUP_SELECTION_DEFAULTS = Object.freeze({
  * @property {boolean} [enabled] - Whether the user is enabled
  * @property {number} [created] - When the user was created
  * @property {string[]} [oauthProviders] - OAuth providers bound to this account (login page uses this to route OAuth-only accounts to the provider flow instead of the password form)
+ * @property {number} [lastLogin] - The timestamp when the user last logged in
+ * @property {number} [lastActivity] - The timestamp when the user last accessed the server
  */
 
 /**
@@ -688,7 +689,7 @@ export async function initializeUserActivity() {
 }
 
 /**
- * 更新用户的最后活动时间，并按配置间隔限制持久化频率。
+ * 更新用户的最后活动时间。每个已认证请求都会立即持久化，保证清理依据接近实时。
  * @param {User} user 当前用户
  * @returns {Promise<void>}
  */
@@ -698,26 +699,38 @@ export async function touchUserActivity(user) {
     }
 
     const now = Date.now();
-    const persistedLastActivity = Number(user.lastActivity);
-    const lastTouch = USER_ACTIVITY_TOUCHES.get(user.handle)
-        ?? (Number.isFinite(persistedLastActivity) ? persistedLastActivity : 0);
-    if (now - lastTouch < USER_ACTIVITY_TOUCH_INTERVAL_MS) {
-        USER_ACTIVITY_TOUCHES.set(user.handle, lastTouch);
-        return;
-    }
-
-    USER_ACTIVITY_TOUCHES.set(user.handle, now);
     try {
         const latest = await storage.getItem(toKey(user.handle));
         if (!latest) {
-            USER_ACTIVITY_TOUCHES.delete(user.handle);
             return;
         }
 
         await storage.setItem(toKey(user.handle), { ...latest, lastActivity: now });
     } catch (error) {
-        USER_ACTIVITY_TOUCHES.delete(user.handle);
         console.warn(`[inactive-user-cleanup] failed to update activity for ${user.handle}:`, error);
+    }
+}
+
+/**
+ * 记录一次成功登录。登录时间独立于活动时间，并且每次登录都会更新。
+ * @param {User} user 当前用户
+ * @returns {Promise<void>}
+ */
+export async function recordUserLogin(user) {
+    if (!ENABLE_ACCOUNTS || !user?.handle) {
+        return;
+    }
+
+    const now = Date.now();
+    try {
+        const latest = await storage.getItem(toKey(user.handle));
+        if (!latest) {
+            return;
+        }
+
+        await storage.setItem(toKey(user.handle), { ...latest, lastLogin: now, lastActivity: now });
+    } catch (error) {
+        console.warn(`[inactive-user-cleanup] failed to record login for ${user.handle}:`, error);
     }
 }
 
@@ -759,7 +772,6 @@ export async function runInactiveUserCleanup(now = Date.now()) {
             await storage.removeItem(toKey(user.handle));
             await storage.removeItem(toAvatarKey(user.handle));
             await fs.promises.rm(getUserDirectories(user.handle).root, { recursive: true, force: true });
-            USER_ACTIVITY_TOUCHES.delete(user.handle);
             removed++;
             console.info(`[inactive-user-cleanup] removed ${user.handle}`);
         } catch (error) {
@@ -1053,6 +1065,7 @@ async function singleUserLogin(request) {
         if (user && !user.password) {
             request.session.handle = userHandles[0];
             request.session.version = getAccountVersion(user);
+            await recordUserLogin(user);
             return true;
         }
     }
@@ -1148,6 +1161,7 @@ async function headerUserLogin(request, header = 'Remote-User') {
             if (user && user.enabled) {
                 request.session.handle = userHandle;
                 request.session.version = getAccountVersion(user);
+                await recordUserLogin(user);
                 return true;
             }
         }
@@ -1217,6 +1231,7 @@ async function basicUserLogin(request) {
 
     request.session.handle = resolved.profile.handle;
     request.session.version = getAccountVersion(resolved.profile);
+    await recordUserLogin(resolved.profile);
     return true;
 }
 

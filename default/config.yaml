@@ -155,7 +155,6 @@ inactiveUserCleanup:
   enabled: false
   inactivityDays: 45
   intervalHours: 24
-  activityTouchIntervalHours: 24
 # If `basicAuthMode` and this are enabled then
 # the username and passwords for basic auth are the same as those
 # for the individual accounts

@@ -7,7 +7,7 @@ import { getIpAddress, retryAfter } from '../express-common.js';
 import { color, Cache, getConfigValue } from '../util.js';
 import { getAdminSettings } from '../admin-settings.js';
 import { checkForNewContent, CONTENT_TYPES } from './content-manager.js';
-import { KEY_PREFIX, getUserAvatar, toKey, toAvatarKey, getPasswordHash, getPasswordSalt, getAccountVersion, getAllUserHandles, getUserDirectories, ensurePublicDirectoriesExist, createBackupArchive, touchUserActivity } from '../users.js';
+import { KEY_PREFIX, getUserAvatar, toKey, toAvatarKey, getPasswordHash, getPasswordSalt, getAccountVersion, getAllUserHandles, getUserDirectories, ensurePublicDirectoriesExist, createBackupArchive, recordUserLogin } from '../users.js';
 import { consumeLanMigrationOffer } from '../lan-migration.js';
 
 const DISCREET_LOGIN = getConfigValue('enableDiscreetLogin', false, 'boolean');
@@ -390,6 +390,7 @@ router.post('/register', async (request, response) => {
         await registerLimiter.delete(ip);
         request.session.handle = newUser.handle;
         request.session.version = getAccountVersion(newUser);
+        await recordUserLogin(newUser);
         console.info('Registration successful:', newUser.handle, 'from', ip, 'at', new Date().toLocaleString());
         return response.json({ handle: newUser.handle });
     } catch (error) {
@@ -594,7 +595,7 @@ router.get('/oauth/callback/:provider', async (request, response) => {
         }
 
         request.session.handle = user.handle;
-        await touchUserActivity(user);
+        await recordUserLogin(user);
         return response.redirect('/');
     } catch (error) {
         console.error('OAuth callback failed:', error);
@@ -685,7 +686,7 @@ router.post('/login', async (request, response) => {
         await loginLimiter.delete(ip);
         request.session.handle = user.handle;
         request.session.version = getAccountVersion(user);
-        await touchUserActivity(user);
+        await recordUserLogin(user);
         console.info('Login successful:', user.handle, 'from', ip, 'at', new Date().toLocaleString());
         return response.json({ handle: user.handle });
     } catch (error) {
