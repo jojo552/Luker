@@ -297,6 +297,28 @@ async function saveAdminPanelSettings(payload) {
     }
 }
 
+async function saveInactiveUserCleanupSettings(payload) {
+    try {
+        const response = await fetch('/api/users/inactive-cleanup/save', {
+            method: 'POST',
+            headers: getRequestHeaders(),
+            body: JSON.stringify(payload),
+        });
+
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            toastr.error(data?.error || t`Failed to save inactive user cleanup settings.`, t`Save failed`);
+            return null;
+        }
+
+        return data;
+    } catch (error) {
+        console.error('Error saving inactive user cleanup settings:', error);
+        toastr.error(t`Failed to save inactive user cleanup settings.`, t`Save failed`);
+        return null;
+    }
+}
+
 /**
  * Map a config-validation error code returned by the server to a localized message.
  * Codes are defined in src/endpoints/users-admin.js#validateConfigSafety.
@@ -2504,6 +2526,15 @@ async function openAdminPanel() {
         template.find('#oauthDiscordScopes').val((settings?.oauth?.discord?.scopes || []).join('\n'));
     }
 
+    function populateInactiveUserCleanupForm(settings) {
+        if (!settings) {
+            return;
+        }
+
+        template.find('#inactiveUserCleanupEnabled').prop('checked', Boolean(settings.enabled));
+        template.find('#inactiveUserCleanupDays').val(Number.isInteger(Number(settings.inactivityDays)) ? settings.inactivityDays : '');
+    }
+
     function collectAuthSettingsForm() {
         const defaultQuotaMb = Number(template.find('#defaultUserQuotaMbInput').val());
         const defaultQuotaBytes = Number.isFinite(defaultQuotaMb) && defaultQuotaMb >= 0
@@ -2603,6 +2634,11 @@ async function openAdminPanel() {
 
         const defaultQuota = Number(currentAdminSettings?.storage?.defaultUserQuotaBytes);
         const quotaLabel = Number.isFinite(defaultQuota) && defaultQuota >= 0 ? humanFileSize(defaultQuota) : t`Unlimited`;
+        const cleanup = overview.inactiveUserCleanup || {};
+        populateInactiveUserCleanupForm(cleanup);
+        const cleanupLabel = cleanup.enabled
+            ? `${cleanup.inactivityDays} ${t`days`}, ${cleanup.intervalHours} ${t`hours`}`
+            : t`Disabled`;
 
         summary.append(
             $('<div class="flex-container flexFlowColumn flexNoGap"/>')
@@ -2612,7 +2648,8 @@ async function openAdminPanel() {
                 .append(`<div><strong>${t`Password protected:`}</strong> ${overview.totals?.protectedUsers ?? 0}</div>`)
                 .append(`<div><strong>${t`Total storage:`}</strong> ${humanFileSize(overview.totals?.storageBytes ?? 0)}</div>`)
                 .append(`<div><strong>${t`Over quota users:`}</strong> ${overview.totals?.overQuotaUsers ?? 0}</div>`)
-                .append(`<div><strong>${t`Default quota:`}</strong> ${quotaLabel}</div>`),
+                .append(`<div><strong>${t`Default quota:`}</strong> ${quotaLabel}</div>`)
+                .append(`<div><strong>${t`Inactive user cleanup:`}</strong> ${cleanupLabel}</div>`),
         );
 
         const usersList = template.find('.adminOverviewUsers');
@@ -3161,6 +3198,7 @@ async function openAdminPanel() {
             userBlock.find('.hasPassword').toggle(user.password);
             userBlock.find('.noPassword').toggle(!user.password);
             userBlock.find('.userCreated').text(new Date(user.created).toLocaleString());
+            userBlock.find('.userLastActivity').text(user.lastActivity ? new Date(user.lastActivity).toLocaleString() : t`Never recorded`);
             userBlock.find('.userEnableButton').toggle(!user.enabled).on('click', () => enableUser(user.handle, renderUsers));
             userBlock.find('.userDisableButton').toggle(user.enabled).on('click', () => disableUser(user.handle, renderUsers));
             userBlock.find('.userPromoteButton').toggle(!user.admin).on('click', () => promoteUser(user.handle, renderUsers));
@@ -3301,6 +3339,26 @@ async function openAdminPanel() {
         currentAdminSettings = saved;
         populateAuthSettingsForm(saved);
         toastr.success(t`Admin settings saved.`, t`Saved`);
+        await renderOverview();
+    });
+
+    template.find('.saveInactiveUserCleanupButton').on('click', async () => {
+        const inactivityDays = Number(template.find('#inactiveUserCleanupDays').val());
+        if (!Number.isSafeInteger(inactivityDays) || inactivityDays <= 0) {
+            toastr.error(t`Please enter a positive whole number of days.`, t`Invalid value`);
+            return;
+        }
+
+        const saved = await saveInactiveUserCleanupSettings({
+            enabled: template.find('#inactiveUserCleanupEnabled').is(':checked'),
+            inactivityDays,
+        });
+        if (!saved) {
+            return;
+        }
+
+        populateInactiveUserCleanupForm(saved);
+        toastr.success(t`Inactive user cleanup settings saved.`, t`Saved`);
         await renderOverview();
     });
 

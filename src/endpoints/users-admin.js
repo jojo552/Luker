@@ -24,6 +24,7 @@ import {
     getPasswordHash,
     getUserDirectories,
     ensurePublicDirectoriesExist,
+    restartInactiveUserCleanup,
 } from '../users.js';
 import {
     resolvePath,
@@ -309,6 +310,7 @@ router.post('/overview', requireAdminMiddleware, async (_request, response) => {
                 enabled: user.enabled,
                 password: Boolean(user.password),
                 created: user.created,
+                lastActivity: user.lastActivity,
                 storageBytes: storageBytes,
                 storageQuotaBytes: effectiveQuotaBytes,
                 storageUsageRatio: effectiveQuotaBytes >= 0 ? storageBytes / Math.max(effectiveQuotaBytes, 1) : null,
@@ -341,6 +343,11 @@ router.post('/overview', requireAdminMiddleware, async (_request, response) => {
             },
             totals,
             settings: adminSettings,
+            inactiveUserCleanup: {
+                enabled: getConfigValue('inactiveUserCleanup.enabled', false, 'boolean'),
+                inactivityDays: Math.floor(getConfigValue('inactiveUserCleanup.inactivityDays', 0, 'number')),
+                intervalHours: Math.floor(getConfigValue('inactiveUserCleanup.intervalHours', 0, 'number')),
+            },
             users: usersWithStats,
             security,
         });
@@ -350,6 +357,43 @@ router.post('/overview', requireAdminMiddleware, async (_request, response) => {
     }
 });
 
+/**
+ * 更新 YAML 中的不活跃账号清理配置，同时保留配置文件其他内容和注释。
+ * @param {string} content 原始 YAML 内容
+ * @param {boolean} enabled 是否启用
+ * @param {number} inactivityDays 不活跃天数
+ * @returns {string} 更新后的 YAML 内容
+ */
+function updateInactiveUserCleanupConfig(content, enabled, inactivityDays) {
+    const hasFinalNewline = content.endsWith('\n');
+    const normalized = content.replace(/\r?\n$/, '');
+    const lines = normalized.split(/\r?\n/);
+    const headerIndex = lines.findIndex(line => /^inactiveUserCleanup:\s*$/.test(line));
+    const fields = { enabled: String(enabled), inactivityDays: String(inactivityDays) };
+
+    if (headerIndex < 0) {
+        if (lines.length > 0 && lines.at(-1).trim() !== '') lines.push('');
+        lines.push('inactiveUserCleanup:');
+        lines.push(`  enabled: ${fields.enabled}`);
+        lines.push(`  inactivityDays: ${fields.inactivityDays}`);
+        lines.push('  intervalHours: 24');
+        lines.push('  activityTouchIntervalHours: 24');
+    } else {
+        let endIndex = headerIndex + 1;
+        while (endIndex < lines.length && (lines[endIndex].trim() === '' || /^[ \t]/.test(lines[endIndex]))) endIndex++;
+        for (const [key, value] of Object.entries(fields)) {
+            const fieldIndex = lines.findIndex((line, index) => index > headerIndex && index < endIndex && new RegExp(`^  ${key}:\\s*`).test(line));
+            if (fieldIndex >= 0) {
+                lines[fieldIndex] = `  ${key}: ${value}`;
+            } else {
+                lines.splice(endIndex, 0, `  ${key}: ${value}`);
+                endIndex++;
+            }
+        }
+    }
+
+    return lines.join('\n') + (hasFinalNewline ? '\n' : '');
+}
 router.post('/settings/get', requireAdminMiddleware, async (_request, response) => {
     try {
         const settings = await getAdminSettings();
@@ -360,6 +404,36 @@ router.post('/settings/get', requireAdminMiddleware, async (_request, response) 
     }
 });
 
+router.post('/inactive-cleanup/save', requireAdminMiddleware, async (request, response) => {
+    try {
+        const inactivityDays = Number(request.body?.inactivityDays);
+        if (!Number.isSafeInteger(inactivityDays) || inactivityDays <= 0) {
+            return response.status(400).json({ error: 'inactivityDays must be a positive integer' });
+        }
+
+        const enabled = request.body?.enabled === true || request.body?.enabled === 'true';
+        const configPath = getConfigFilePath();
+        if (!configPath) {
+            return response.status(500).json({ error: 'Config path not initialized' });
+        }
+
+        const content = await fsPromises.readFile(configPath, 'utf8');
+        const updated = updateInactiveUserCleanupConfig(content, enabled, inactivityDays);
+        await fsPromises.writeFile(configPath, updated, 'utf8');
+        reloadConfigCache();
+        restartInactiveUserCleanup();
+
+        return response.json({
+            ok: true,
+            enabled: getConfigValue('inactiveUserCleanup.enabled', false, 'boolean'),
+            inactivityDays: Math.floor(getConfigValue('inactiveUserCleanup.inactivityDays', 0, 'number')),
+            intervalHours: Math.floor(getConfigValue('inactiveUserCleanup.intervalHours', 0, 'number')),
+        });
+    } catch (error) {
+        console.error('Inactive user cleanup settings save failed:', error);
+        return response.status(500).json({ error: String(error?.message || error) });
+    }
+});
 router.post('/settings/save', requireAdminMiddleware, async (request, response) => {
     try {
         const saved = await saveAdminSettings(request.body || {});
@@ -699,6 +773,7 @@ router.post('/get', requireAdminMiddleware, async (_request, response) => {
                         admin: user.admin,
                         enabled: user.enabled,
                         created: user.created,
+                        lastActivity: user.lastActivity,
                         password: !!user.password,
                         storageQuotaBytes: Number.isFinite(Number(user.storageQuotaBytes)) ? Number(user.storageQuotaBytes) : null,
                         oauthProviders: Object.keys(user.oauth || {}),
@@ -850,6 +925,7 @@ router.post('/create', requireAdminMiddleware, async (request, response) => {
             handle: handle,
             name: request.body.name || 'Anonymous',
             created: Date.now(),
+            lastActivity: Date.now(),
             password: password,
             salt: salt,
             admin: !!request.body.admin,

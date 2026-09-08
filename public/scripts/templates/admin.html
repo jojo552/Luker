@@ -61,6 +61,7 @@
                     <span><span data-i18n="Role:">Role:</span> <span class="userRole"></span></span>
                     <span><span data-i18n="Status:">Status:</span> <span class="userStatus">&nbsp;</span></span>
                     <span><span data-i18n="Created:">Created:</span> <span class="userCreated">&nbsp;</span></span>
+                    <span><span data-i18n="Last activity:">Last activity:</span> <span class="userLastActivity">-</span></span>
                     <span><span data-i18n="Quota:">Quota:</span> <span class="userQuota">Unlimited</span></span>
                     <span><span data-i18n="OAuth:">OAuth:</span> <span class="userOAuth">None</span></span>
                 </div>
@@ -142,6 +143,22 @@
         <div class="flex-container flexFlowColumn flexGap10">
             <label><input type="checkbox" id="accountRegistrationEnabled" /> <span data-i18n="Allow visitors to register accounts from the login page">Allow visitors to register accounts from the login page</span></label>
             <small data-i18n="When enabled, the login page shows a &quot;Create account&quot; form. New accounts default to non-admin and respect the storage quota above.">When enabled, the login page shows a "Create account" form. New accounts default to non-admin and respect the storage quota above.</small>
+        </div>
+
+        <h4 class="margin0" data-i18n="Inactive user cleanup">Inactive user cleanup</h4>
+        <div class="flex-container flexFlowColumn flexGap10">
+            <label><input type="checkbox" id="inactiveUserCleanupEnabled" /> <span data-i18n="Automatically remove inactive user accounts">Automatically remove inactive user accounts</span></label>
+            <div class="flex-container alignItemsCenter flexGap10">
+                <label for="inactiveUserCleanupDays" data-i18n="Remove after inactivity (days)">Remove after inactivity (days)</label>
+                <input id="inactiveUserCleanupDays" class="text_pole" type="number" min="1" step="1" />
+            </div>
+            <small data-i18n="Administrators and the default user are never removed. OAuth users follow the same activity rule.">Administrators and the default user are never removed. OAuth users follow the same activity rule.</small>
+            <div>
+                <div class="saveInactiveUserCleanupButton menu_button menu_button_icon">
+                    <i class="fa-fw fa-solid fa-save"></i>
+                    <span data-i18n="Save inactive cleanup settings">Save inactive cleanup settings</span>
+                </div>
+            </div>
         </div>
 
         <h4 class="margin0" data-i18n="GitHub OAuth">GitHub OAuth</h4>

@@ -25,6 +25,7 @@ import { filterValidIpPatterns, getIpFromRequest } from './express-common.js';
 import { extensionsEnabledFeatureGuard } from './endpoints/extensions.js';
 import { getStorageEngine } from './storage/index.js';
 import { ENGINE_META_ENTRY, ENGINE_DUMP_ENTRY } from './storage/engine-backup-entries.js';
+import { selectInactiveUsers } from './inactive-user-cleanup.js';
 
 export const KEY_PREFIX = 'user:';
 const AVATAR_PREFIX = 'avatar:';
@@ -69,6 +70,10 @@ const TRUSTED_PROXIES = filterValidIpPatterns(getConfigValue('sso.trustedProxies
  * @type {Map<string, UserDirectoryList>}
  */
 const DIRECTORIES_CACHE = new Map();
+const USER_ACTIVITY_TOUCHES = new Map();
+const HOUR_IN_MILLISECONDS = 60 * 60 * 1000;
+const USER_ACTIVITY_TOUCH_INTERVAL_MS = Math.max(1, Math.floor(getConfigValue('inactiveUserCleanup.activityTouchIntervalHours', 24, 'number'))) * HOUR_IN_MILLISECONDS;
+let INACTIVE_USER_CLEANUP_TIMER = null;
 const PUBLIC_USER_AVATAR = '/img/user-default.png';
 const COOKIE_SECRET_PATH = 'cookie-secret.txt';
 
@@ -102,6 +107,7 @@ export const USER_BACKUP_SELECTION_DEFAULTS = Object.freeze({
  * @property {string} salt - Salt used for hashing the password
  * @property {boolean} enabled - Whether the user is enabled
  * @property {boolean} admin - Whether the user is an admin (can manage other users)
+ * @property {number} [lastActivity] - The timestamp when the user last accessed the server
  */
 
 /**
@@ -655,6 +661,178 @@ export async function initUserStorage(dataRoot) {
 }
 
 /**
+ * 为历史账号补齐活动时间，避免首次启用自动清理时误删旧账号。
+ * @returns {Promise<void>}
+ */
+export async function initializeUserActivity() {
+    if (!ENABLE_ACCOUNTS) {
+        return;
+    }
+
+    let initialized = 0;
+    const handles = await getAllUserHandles();
+    for (const handle of handles) {
+        const user = await storage.getItem(toKey(handle));
+        const lastActivity = Number(user?.lastActivity);
+        if (!user || (Number.isFinite(lastActivity) && lastActivity > 0)) {
+            continue;
+        }
+
+        await storage.setItem(toKey(handle), { ...user, lastActivity: Date.now() });
+        initialized++;
+    }
+
+    if (initialized > 0) {
+        console.info(`[inactive-user-cleanup] initialized activity timestamps for ${initialized} users`);
+    }
+}
+
+/**
+ * 更新用户的最后活动时间，并按配置间隔限制持久化频率。
+ * @param {User} user 当前用户
+ * @returns {Promise<void>}
+ */
+export async function touchUserActivity(user) {
+    if (!ENABLE_ACCOUNTS || !user?.handle) {
+        return;
+    }
+
+    const now = Date.now();
+    const persistedLastActivity = Number(user.lastActivity);
+    const lastTouch = USER_ACTIVITY_TOUCHES.get(user.handle)
+        ?? (Number.isFinite(persistedLastActivity) ? persistedLastActivity : 0);
+    if (now - lastTouch < USER_ACTIVITY_TOUCH_INTERVAL_MS) {
+        USER_ACTIVITY_TOUCHES.set(user.handle, lastTouch);
+        return;
+    }
+
+    USER_ACTIVITY_TOUCHES.set(user.handle, now);
+    try {
+        const latest = await storage.getItem(toKey(user.handle));
+        if (!latest) {
+            USER_ACTIVITY_TOUCHES.delete(user.handle);
+            return;
+        }
+
+        await storage.setItem(toKey(user.handle), { ...latest, lastActivity: now });
+    } catch (error) {
+        USER_ACTIVITY_TOUCHES.delete(user.handle);
+        console.warn(`[inactive-user-cleanup] failed to update activity for ${user.handle}:`, error);
+    }
+}
+
+/**
+ * 读取不活跃账号清理配置。天数和检查间隔均来自 config.yaml。
+ * @returns {{enabled: boolean, inactivityDays: number, intervalHours: number}} 清理配置
+ */
+export function getInactiveUserCleanupSettings() {
+    return {
+        enabled: getConfigValue('inactiveUserCleanup.enabled', false, 'boolean'),
+        inactivityDays: Math.floor(getConfigValue('inactiveUserCleanup.inactivityDays', 0, 'number')),
+        intervalHours: Math.floor(getConfigValue('inactiveUserCleanup.intervalHours', 0, 'number')),
+    };
+}
+
+/**
+ * 执行一次不活跃账号清理。只删除普通账号，不删除管理员和默认账号。
+ * @param {number} [now] 用于测试的当前时间戳
+ * @returns {Promise<number>} 删除的账号数量
+ */
+export async function runInactiveUserCleanup(now = Date.now()) {
+    const settings = getInactiveUserCleanupSettings();
+    if (!settings.enabled || settings.inactivityDays <= 0) {
+        return 0;
+    }
+
+    const users = await storage.values(x => x.key.startsWith(KEY_PREFIX));
+    const inactiveUsers = selectInactiveUsers(users, {
+        now,
+        inactivityDays: settings.inactivityDays,
+        defaultHandle: DEFAULT_USER.handle,
+    });
+
+    let removed = 0;
+    for (const user of inactiveUsers) {
+        try {
+            // 先清理存储引擎，再删除账号索引，避免留下孤儿数据。
+            await getStorageEngine().deleteUser(user.handle);
+            await storage.removeItem(toKey(user.handle));
+            await storage.removeItem(toAvatarKey(user.handle));
+            await fs.promises.rm(getUserDirectories(user.handle).root, { recursive: true, force: true });
+            USER_ACTIVITY_TOUCHES.delete(user.handle);
+            removed++;
+            console.info(`[inactive-user-cleanup] removed ${user.handle}`);
+        } catch (error) {
+            console.error(`[inactive-user-cleanup] failed to remove ${user.handle}:`, error);
+        }
+    }
+
+    if (removed > 0) {
+        console.info(`[inactive-user-cleanup] removed ${removed} inactive user(s)`);
+    }
+    return removed;
+}
+
+/**
+ * 停止不活跃账号清理定时器。
+ * @returns {void}
+ */
+export function stopInactiveUserCleanup() {
+    if (INACTIVE_USER_CLEANUP_TIMER) {
+        clearInterval(INACTIVE_USER_CLEANUP_TIMER);
+        INACTIVE_USER_CLEANUP_TIMER = null;
+    }
+}
+
+/**
+ * 启动不活跃账号清理定时器。
+ * @returns {NodeJS.Timeout|null} 定时器句柄，未启用时返回 null
+ */
+export function startInactiveUserCleanup() {
+    if (INACTIVE_USER_CLEANUP_TIMER) {
+        return INACTIVE_USER_CLEANUP_TIMER;
+    }
+
+    const settings = getInactiveUserCleanupSettings();
+    if (!ENABLE_ACCOUNTS || !settings.enabled) {
+        return null;
+    }
+
+    if (settings.inactivityDays <= 0 || settings.intervalHours <= 0) {
+        console.warn('[inactive-user-cleanup] disabled because inactivityDays and intervalHours must be positive integers');
+        return null;
+    }
+
+    let running = false;
+    const execute = async () => {
+        if (running) {
+            return;
+        }
+        running = true;
+        try {
+            await runInactiveUserCleanup();
+        } finally {
+            running = false;
+        }
+    };
+
+    void execute();
+    INACTIVE_USER_CLEANUP_TIMER = setInterval(execute, settings.intervalHours * HOUR_IN_MILLISECONDS);
+    INACTIVE_USER_CLEANUP_TIMER.unref();
+    console.info(`[inactive-user-cleanup] enabled: ${settings.inactivityDays} days, every ${settings.intervalHours} hours`);
+    return INACTIVE_USER_CLEANUP_TIMER;
+}
+
+/**
+ * 配置热更新后重启清理定时器。
+ * @returns {NodeJS.Timeout|null} 定时器句柄，未启用时返回 null
+ */
+export function restartInactiveUserCleanup() {
+    stopInactiveUserCleanup();
+    return startInactiveUserCleanup();
+}
+
+/**
  * Get the cookie secret from the config. If it doesn't exist, generate a new one.
  * @param {string} dataRoot The root directory for user data
  * @returns {string} The cookie secret
@@ -1116,6 +1294,8 @@ export async function setUserDataMiddleware(request, response, next) {
         profile: user,
         directories: directories,
     };
+
+    await touchUserActivity(user);
 
     // Touch the session if loading the home page
     if (request.method === 'GET' && request.path === '/') {

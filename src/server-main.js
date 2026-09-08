@@ -93,6 +93,8 @@ import {
     verifySecuritySettings,
     loginPageMiddleware,
     migratePublicOverrides,
+    initializeUserActivity,
+    startInactiveUserCleanup,
     isRequestAdmin,
 } from './users.js';
 import { initStorage, getStorageEngine } from './storage/index.js';
@@ -903,6 +905,7 @@ initUserStorage(globalThis.DATA_ROOT)
     .then(migrateUserData)
     .then(migrateSystemPrompts)
     .then(migratePublicOverrides)
+    .then(initializeUserActivity)
     .then(verifySecuritySettings)
     .then(() => initStorage({
         mode: getConfigValue('storage.mode', 'fs'),
@@ -938,4 +941,5 @@ initUserStorage(globalThis.DATA_ROOT)
     .then(preSetupTasks)
     .then(apply404Middleware)
     .then(() => new ServerStartup(app, cliArgs).start())
-    .then(postSetupTasks);
+    .then(postSetupTasks)
+    .then(() => startInactiveUserCleanup());

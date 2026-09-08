@@ -7,7 +7,7 @@ import { getIpAddress, retryAfter } from '../express-common.js';
 import { color, Cache, getConfigValue } from '../util.js';
 import { getAdminSettings } from '../admin-settings.js';
 import { checkForNewContent, CONTENT_TYPES } from './content-manager.js';
-import { KEY_PREFIX, getUserAvatar, toKey, toAvatarKey, getPasswordHash, getPasswordSalt, getAccountVersion, getAllUserHandles, getUserDirectories, ensurePublicDirectoriesExist, createBackupArchive } from '../users.js';
+import { KEY_PREFIX, getUserAvatar, toKey, toAvatarKey, getPasswordHash, getPasswordSalt, getAccountVersion, getAllUserHandles, getUserDirectories, ensurePublicDirectoriesExist, createBackupArchive, touchUserActivity } from '../users.js';
 import { consumeLanMigrationOffer } from '../lan-migration.js';
 
 const DISCREET_LOGIN = getConfigValue('enableDiscreetLogin', false, 'boolean');
@@ -162,6 +162,7 @@ async function createUserFromOAuth(provider, profile, adminSettings) {
         handle,
         name: String(profile.name || profile.username || profile.login || handle),
         created: Date.now(),
+        lastActivity: Date.now(),
         password: '',
         salt: salt,
         admin: false,
@@ -373,6 +374,7 @@ router.post('/register', async (request, response) => {
             handle,
             name: rawName,
             created: Date.now(),
+            lastActivity: Date.now(),
             password: getPasswordHash(password, salt),
             salt,
             admin: false,
@@ -592,6 +594,7 @@ router.get('/oauth/callback/:provider', async (request, response) => {
         }
 
         request.session.handle = user.handle;
+        await touchUserActivity(user);
         return response.redirect('/');
     } catch (error) {
         console.error('OAuth callback failed:', error);
@@ -617,6 +620,7 @@ router.post('/list', async (_request, response) => {
                         handle: user.handle,
                         name: user.name,
                         created: user.created,
+                        lastActivity: user.lastActivity,
                         avatar: avatar,
                         password: !!user.password,
                         oauthProviders: Object.keys(user.oauth || {}),
@@ -681,6 +685,7 @@ router.post('/login', async (request, response) => {
         await loginLimiter.delete(ip);
         request.session.handle = user.handle;
         request.session.version = getAccountVersion(user);
+        await touchUserActivity(user);
         console.info('Login successful:', user.handle, 'from', ip, 'at', new Date().toLocaleString());
         return response.json({ handle: user.handle });
     } catch (error) {
