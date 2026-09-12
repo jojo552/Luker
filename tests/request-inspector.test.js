@@ -3,6 +3,7 @@ import {
     startInspection,
     completeInspection,
     completeInspectionFromStream,
+    cleanupExpiredEntries,
     getBufferForHandle,
 } from '../src/request-inspector.js';
 
@@ -201,5 +202,44 @@ describe('request-inspector: 200-but-error detection', () => {
             expect(e.status).toBe('success');
             expect(e.error).toBe('');
         });
+    });
+});
+
+describe('request-inspector: complete payload retention', () => {
+    test('keeps complete payloads before TTL and removes the whole entry after TTL', () => {
+        const req = newRequest();
+        startInspection(req);
+        completeInspection(req, {
+            choices: [{ message: { content: 'full response' }, finish_reason: 'stop' }],
+        });
+
+        const entry = getEntry(req);
+        const fullMessages = [{ role: 'user', content: 'complete request body' }];
+        const wireRequest = { messages: fullMessages, metadata: { preserved: true } };
+        entry.fullMessages = fullMessages;
+        entry.wireRequest = wireRequest;
+        entry.timestamp = Date.now() - (2 * 60 * 60 * 1000) + 1000;
+
+        expect(cleanupExpiredEntries(Date.now())).toBe(0);
+        expect(getEntry(req).fullMessages).toEqual(fullMessages);
+        expect(getEntry(req).wireRequest).toEqual(wireRequest);
+
+        entry.timestamp = Date.now() - (2 * 60 * 60 * 1000) - 1000;
+        expect(cleanupExpiredEntries(Date.now())).toBe(1);
+        expect(getBufferForHandle(req.user.profile.handle)).toEqual([]);
+    });
+
+    test('keeps a running request through the normal TTL grace period', () => {
+        const req = newRequest();
+        startInspection(req);
+        const entry = getEntry(req);
+        entry.timestamp = Date.now() - (2 * 60 * 60 * 1000) - 1000;
+
+        expect(cleanupExpiredEntries(Date.now())).toBe(0);
+        expect(getEntry(req)).toBe(entry);
+
+        entry.timestamp = Date.now() - (6 * 60 * 60 * 1000) - 1000;
+        expect(cleanupExpiredEntries(Date.now())).toBe(1);
+        expect(getEntry(req)).toBeNull();
     });
 });

@@ -5,9 +5,40 @@ import express from 'express';
 import { randomUUID } from 'node:crypto';
 
 const RING_BUFFER_SIZE = 200;
+const DEFAULT_TTL_MS = 2 * 60 * 60 * 1000;
+const DEFAULT_CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
+const DEFAULT_MAX_ENTRIES = 10_000;
+const MIN_CLEANUP_INTERVAL_MS = 10 * 1000;
+const MIN_TTL_MS = 10 * 1000;
+const ACTIVE_ENTRY_MAX_AGE_MS = 6 * 60 * 60 * 1000;
+
+function readPositiveIntegerEnv(name, fallback, minimum) {
+ const value = Number(process.env[name]);
+ if (!Number.isFinite(value) || value < minimum) return fallback;
+ return Math.floor(value);
+}
+
+const REQUEST_INSPECTOR_TTL_MS = readPositiveIntegerEnv(
+ 'LUKER_REQUEST_INSPECTOR_TTL_MS',
+ DEFAULT_TTL_MS,
+ MIN_TTL_MS,
+);
+const REQUEST_INSPECTOR_CLEANUP_INTERVAL_MS = readPositiveIntegerEnv(
+ 'LUKER_REQUEST_INSPECTOR_CLEANUP_INTERVAL_MS',
+ DEFAULT_CLEANUP_INTERVAL_MS,
+ MIN_CLEANUP_INTERVAL_MS,
+);
+const REQUEST_INSPECTOR_MAX_ENTRIES = readPositiveIntegerEnv(
+ 'LUKER_REQUEST_INSPECTOR_MAX_ENTRIES',
+ DEFAULT_MAX_ENTRIES,
+ 1,
+);
 
 /** @type {Map<string, InspectorEntry[]>} handle -> entries */
 const buffers = new Map();
+let totalEntries = 0;
+let expiredEntriesRemoved = 0;
+let evictedEntries = 0;
 
 function getBuffer(handle) {
  if (!buffers.has(handle)) {
@@ -83,6 +114,8 @@ export function getRequestInspectorStats() {
  estimatedTextBytes: contentChars * 2,
  oldestAgeMs: oldestTimestamp === null ? null : Math.max(0, now - oldestTimestamp),
  newestAgeMs: newestTimestamp === null ? null : Math.max(0, now - newestTimestamp),
+ expiredEntriesRemoved,
+ evictedEntries,
  };
 }
 
@@ -102,13 +135,88 @@ export function getBufferForHandle(handle) {
  return buffers.get(h).slice();
 }
 
+function removeEntry(handle, entry) {
+ const buffer = buffers.get(handle);
+ if (!buffer) return false;
+
+ const index = buffer.indexOf(entry);
+ if (index === -1) return false;
+
+ buffer.splice(index, 1);
+ totalEntries--;
+ if (buffer.length === 0) buffers.delete(handle);
+ return true;
+}
+
+/**
+ * Remove expired inspector entries while preserving complete payloads until
+ * the entry itself expires. Running requests get a grace period so a long
+ * generation is not detached before its final response is captured.
+ *
+ * @param {number} [now]
+ * @returns {number} Number of entries removed during this pass.
+ */
+export function cleanupExpiredEntries(now = Date.now()) {
+ let removed = 0;
+
+ for (const [handle, buffer] of buffers) {
+ for (const entry of [...buffer]) {
+ const age = now - Number(entry.timestamp);
+ const isRunning = entry.status === 'running';
+ const isExpired = isRunning
+ ? age >= Math.max(REQUEST_INSPECTOR_TTL_MS, ACTIVE_ENTRY_MAX_AGE_MS)
+ : age >= REQUEST_INSPECTOR_TTL_MS;
+
+ if (isExpired && removeEntry(handle, entry)) removed++;
+ }
+ }
+
+ expiredEntriesRemoved += removed;
+ return removed;
+}
+
+function enforceGlobalEntryLimit() {
+ const excess = totalEntries - REQUEST_INSPECTOR_MAX_ENTRIES;
+ if (excess <= 0) return 0;
+
+ const entries = [];
+ for (const [handle, buffer] of buffers) {
+ for (const entry of buffer) {
+ entries.push({ handle, entry });
+ }
+ }
+
+ // Completed entries are evicted first. Running requests are only a final
+ // fallback when every retained entry is still in progress.
+ entries.sort((left, right) => {
+ const leftRunning = left.entry.status === 'running' ? 1 : 0;
+ const rightRunning = right.entry.status === 'running' ? 1 : 0;
+ if (leftRunning !== rightRunning) return leftRunning - rightRunning;
+ return Number(left.entry.timestamp) - Number(right.entry.timestamp);
+ });
+
+ let removed = 0;
+ for (const { handle, entry } of entries.slice(0, excess)) {
+ if (removeEntry(handle, entry)) removed++;
+ }
+
+ evictedEntries += removed;
+ return removed;
+}
+
 function pushEntry(handle, entry) {
  const buf = getBuffer(handle);
  buf.push(entry);
+ totalEntries++;
  if (buf.length > RING_BUFFER_SIZE) {
  buf.shift();
+ totalEntries--;
  }
+ enforceGlobalEntryLimit();
 }
+
+const cleanupTimer = setInterval(cleanupExpiredEntries, REQUEST_INSPECTOR_CLEANUP_INTERVAL_MS);
+cleanupTimer.unref?.();
 
 /**
  * Produce a redacted fingerprint of an API key suitable for the Inspector UI.
@@ -271,7 +379,8 @@ export function findEntry(request) {
  const handle = String(request?.user?.profile?.handle || '');
  const id = request?.__inspectorId;
  if (!handle || !id) return null;
- const buf = getBuffer(handle);
+ const buf = buffers.get(handle);
+ if (!buf) return null;
  for (let i = buf.length - 1; i >= 0; i--) {
  if (buf[i].id === id) return buf[i];
  }
