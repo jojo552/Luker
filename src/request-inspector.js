@@ -7,7 +7,6 @@ import { randomUUID } from 'node:crypto';
 const RING_BUFFER_SIZE = 200;
 const DEFAULT_TTL_MS = 2 * 60 * 60 * 1000;
 const DEFAULT_CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
-const DEFAULT_MAX_ENTRIES = 10_000;
 const MIN_CLEANUP_INTERVAL_MS = 10 * 1000;
 const MIN_TTL_MS = 10 * 1000;
 const ACTIVE_ENTRY_MAX_AGE_MS = 6 * 60 * 60 * 1000;
@@ -28,17 +27,10 @@ const REQUEST_INSPECTOR_CLEANUP_INTERVAL_MS = readPositiveIntegerEnv(
  DEFAULT_CLEANUP_INTERVAL_MS,
  MIN_CLEANUP_INTERVAL_MS,
 );
-const REQUEST_INSPECTOR_MAX_ENTRIES = readPositiveIntegerEnv(
- 'LUKER_REQUEST_INSPECTOR_MAX_ENTRIES',
- DEFAULT_MAX_ENTRIES,
- 1,
-);
 
 /** @type {Map<string, InspectorEntry[]>} handle -> entries */
 const buffers = new Map();
-let totalEntries = 0;
 let expiredEntriesRemoved = 0;
-let evictedEntries = 0;
 
 function getBuffer(handle) {
  if (!buffers.has(handle)) {
@@ -115,7 +107,6 @@ export function getRequestInspectorStats() {
  oldestAgeMs: oldestTimestamp === null ? null : Math.max(0, now - oldestTimestamp),
  newestAgeMs: newestTimestamp === null ? null : Math.max(0, now - newestTimestamp),
  expiredEntriesRemoved,
- evictedEntries,
  };
 }
 
@@ -143,7 +134,6 @@ function removeEntry(handle, entry) {
  if (index === -1) return false;
 
  buffer.splice(index, 1);
- totalEntries--;
  if (buffer.length === 0) buffers.delete(handle);
  return true;
 }
@@ -175,44 +165,12 @@ export function cleanupExpiredEntries(now = Date.now()) {
  return removed;
 }
 
-function enforceGlobalEntryLimit() {
- const excess = totalEntries - REQUEST_INSPECTOR_MAX_ENTRIES;
- if (excess <= 0) return 0;
-
- const entries = [];
- for (const [handle, buffer] of buffers) {
- for (const entry of buffer) {
- entries.push({ handle, entry });
- }
- }
-
- // Completed entries are evicted first. Running requests are only a final
- // fallback when every retained entry is still in progress.
- entries.sort((left, right) => {
- const leftRunning = left.entry.status === 'running' ? 1 : 0;
- const rightRunning = right.entry.status === 'running' ? 1 : 0;
- if (leftRunning !== rightRunning) return leftRunning - rightRunning;
- return Number(left.entry.timestamp) - Number(right.entry.timestamp);
- });
-
- let removed = 0;
- for (const { handle, entry } of entries.slice(0, excess)) {
- if (removeEntry(handle, entry)) removed++;
- }
-
- evictedEntries += removed;
- return removed;
-}
-
 function pushEntry(handle, entry) {
  const buf = getBuffer(handle);
  buf.push(entry);
- totalEntries++;
  if (buf.length > RING_BUFFER_SIZE) {
  buf.shift();
- totalEntries--;
  }
- enforceGlobalEntryLimit();
 }
 
 const cleanupTimer = setInterval(cleanupExpiredEntries, REQUEST_INSPECTOR_CLEANUP_INTERVAL_MS);
