@@ -54,6 +54,90 @@ function fakeCtx({ body = {}, onFetch, secretMap = {}, signal } = {}) {
     };
 }
 
+describe('OpenRouter Gemini history cache wire requests', () => {
+    function geminiCtx(overrides = {}) {
+        const messages = [{ role: 'system', content: 'Rules' }, { role: 'assistant', content: '<summary>Old history</summary>' }];
+        for (let i = 0; i < 5; i++) messages.push({ role: 'user', content: `User ${i}` }, { role: 'assistant', content: `Assistant ${i}` });
+        messages.push({ role: 'user', content: 'Latest' });
+        const onFetch = jest.fn(async url => {
+            if (String(url).endsWith('/models')) {
+                if (overrides.__modelsFail) return new Response('upstream unavailable', { status: 503 });
+                return new Response(JSON.stringify({ data: [{ id: 'google/gemini-cache-test', pricing: { input_cache_write: '0' } }] }), { status: 200 });
+            }
+            return new Response(JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'Reply' } }] }), { status: 200 });
+        });
+        return fakeCtx({
+            secretMap: { api_key_openrouter: 'or-test-key' }, onFetch,
+            body: {
+                chat_completion_source: CHAT_COMPLETION_SOURCES.OPENROUTER,
+                model: 'google/gemini-cache-test', messages,
+                gemini_enable_history_cache: true, gemini_enable_system_prompt_cache: true,
+                gemini_cache_keep_recent_turns: 2, gemini_cache_session: 'private-chat-name',
+                tools: [{ type: 'function', function: { name: 'lookup', parameters: { type: 'object' } } }],
+                ...overrides,
+            },
+        });
+    }
+    function wire(ctx) {
+        const call = ctx.fetch.mock.calls.find(([url]) => String(url).endsWith('/chat/completions'));
+        return call ? JSON.parse(call[1].body) : null;
+    }
+
+    test('marks history after summaries once, preserves tools, and keeps local controls off the wire', async () => {
+        const ctx = geminiCtx();
+        await dispatchOpenAICompatible(ctx);
+        const request = wire(ctx);
+        expect(request.messages[7].content[0].cache_control).toEqual({ type: 'ephemeral' });
+        expect(request.messages[0].content).toBe('Rules');
+        expect(request.messages[1].content).toBe('<summary>Old history</summary>');
+        expect(JSON.stringify(request).match(/cache_control/g)).toHaveLength(1);
+        expect(request.tools).toEqual(ctx.body.tools);
+        expect(JSON.stringify(request)).not.toContain('private-chat-name');
+        expect(request.gemini_enable_history_cache).toBeUndefined();
+        expect(ctx._emitted.filter(event => event.kind === 'error')).toHaveLength(0);
+    });
+
+    test('disabled history mode preserves existing system-only behavior', async () => {
+        const ctx = geminiCtx({ gemini_enable_history_cache: false });
+        await dispatchOpenAICompatible(ctx);
+        expect(wire(ctx).messages[0].content[0].cache_control).toEqual({ type: 'ephemeral' });
+        expect(wire(ctx).messages[9].content).toBe('Assistant 3');
+    });
+
+    test('short requests use the separately selected system-cache fallback', async () => {
+        const ctx = geminiCtx({ messages: [{ role: 'system', content: 'Rules' }, { role: 'user', content: 'Question' }] });
+        await dispatchOpenAICompatible(ctx);
+        expect(wire(ctx).messages[0].content[0].cache_control).toEqual({ type: 'ephemeral' });
+    });
+
+    test('invalid policy and models known to lack cache support fail before sending a generation', async () => {
+        for (const overrides of [{ gemini_cache_keep_recent_turns: 0 }, { model: 'google/gemini-unsupported' }]) {
+            const ctx = geminiCtx(overrides);
+            await dispatchOpenAICompatible(ctx);
+            expect(wire(ctx)).toBeNull();
+            expect(ctx._emitted.some(event => event.kind === 'error')).toBe(true);
+        }
+    });
+
+    test('unreachable models API degrades to an unmarked request instead of failing the generation', async () => {
+        const ctx = geminiCtx({
+            model: 'google/gemini-unreachable-check',
+            __modelsFail: true,
+        });
+        await dispatchOpenAICompatible(ctx);
+        const request = wire(ctx);
+        expect(request).not.toBeNull();
+        expect(JSON.stringify(request)).not.toContain('cache_control');
+        expect(ctx._emitted.filter(event => event.kind === 'error')).toHaveLength(0);
+    });
+
+    test('other OpenRouter models ignore Gemini history settings', async () => {
+        const ctx = geminiCtx({ model: 'openai/gpt-test' });
+        await dispatchOpenAICompatible(ctx);
+        expect(JSON.stringify(wire(ctx))).not.toContain('cache_control');
+    });
+});
+
 describe('dispatchOpenAICompatible', () => {
     describe('resolveOpenAI', () => {
         test('default URL + Bearer + POST /chat/completions', async () => {
