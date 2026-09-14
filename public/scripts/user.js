@@ -3194,6 +3194,7 @@ async function openAdminPanel() {
     }
 
     let usersPage = 1;
+    let usersPageCount = 1;
     let usersQuery = '';
 
     async function renderUsers() {
@@ -3203,10 +3204,19 @@ async function openAdminPanel() {
         }
 
         usersPage = data.page;
+        usersPageCount = data.pageCount;
         template.find('.usersListItems').empty();
-        template.find('.usersPageInfo').text(`${data.page} / ${data.pageCount} (${data.total})`);
+        const pageInput = template.find('.usersPageInput');
+        pageInput.attr('max', data.pageCount);
+        // 输入框聚焦时不覆盖用户正在输入的内容
+        if (document.activeElement !== pageInput[0]) {
+            pageInput.val(data.page);
+        }
+        template.find('.usersPageTotal').text(`\u00A0/ ${data.pageCount} (${data.total})`);
+        template.find('.usersFirstPage').toggleClass('disabled', data.page <= 1);
         template.find('.usersPrevPage').toggleClass('disabled', data.page <= 1);
         template.find('.usersNextPage').toggleClass('disabled', data.page >= data.pageCount);
+        template.find('.usersLastPage').toggleClass('disabled', data.page >= data.pageCount);
 
         for (const user of data.users) {
             const userBlock = template.find('.userAccountTemplate .userAccount').clone();
@@ -3322,6 +3332,12 @@ async function openAdminPanel() {
 
     template.find('.overviewRefreshButton').on('click', renderOverview);
 
+    template.find('.usersFirstPage').on('click', () => {
+        if (usersPage > 1) {
+            usersPage = 1;
+            void renderUsers();
+        }
+    });
     template.find('.usersPrevPage').on('click', () => {
         if (usersPage > 1) {
             usersPage--;
@@ -3329,8 +3345,42 @@ async function openAdminPanel() {
         }
     });
     template.find('.usersNextPage').on('click', () => {
-        usersPage++;
-        void renderUsers();
+        if (usersPage < usersPageCount) {
+            usersPage++;
+            void renderUsers();
+        }
+    });
+    template.find('.usersLastPage').on('click', () => {
+        if (usersPage < usersPageCount) {
+            usersPage = usersPageCount;
+            void renderUsers();
+        }
+    });
+    function jumpToUsersPage(value) {
+        const parsed = Math.floor(Number(value));
+        // 非法输入不跳转，只把输入框纠正回当前页
+        if (!Number.isFinite(parsed) || parsed < 1) {
+            template.find('.usersPageInput').val(usersPage);
+            return;
+        }
+
+        const target = Math.min(usersPageCount, parsed);
+        if (target !== usersPage) {
+            usersPage = target;
+            void renderUsers();
+        } else {
+            template.find('.usersPageInput').val(usersPage);
+        }
+    }
+    template.find('.usersPageInput').on('keydown', function (event) {
+        if (event.key === 'Enter') {
+            event.preventDefault();
+            jumpToUsersPage($(this).val());
+            this.blur();
+        }
+    });
+    template.find('.usersPageInput').on('change', function () {
+        jumpToUsersPage($(this).val());
     });
     let usersSearchTimer;
     template.find('.usersSearchInput').on('input', function () {
