@@ -129,6 +129,7 @@ export const USER_BACKUP_SELECTION_DEFAULTS = Object.freeze({
  * @property {string[]} [oauthProviders] - OAuth providers bound to this account (login page uses this to route OAuth-only accounts to the provider flow instead of the password form)
  * @property {number} [lastLogin] - The timestamp when the user last logged in
  * @property {number} [lastActivity] - The timestamp when the user last accessed the server
+ * @property {boolean} [online] - Whether the user was active within the online window
  */
 
 /**
@@ -813,6 +814,23 @@ export function getLatestUserActivity(handle, persistedTimestamp) {
 
     const persisted = Number(persistedTimestamp);
     return pendingTimestamp > (Number.isFinite(persisted) ? persisted : 0) ? pendingTimestamp : persistedTimestamp;
+}
+
+/**
+ * 在线判定窗口。前端心跳间隔必须远小于该窗口，否则在线状态会抖动。
+ */
+export const ONLINE_USER_WINDOW_MS = 5 * 60 * 1000;
+
+/**
+ * 判断用户当前是否在线：最新活动时间（含未落盘的内存时间）在窗口内即视为在线。
+ * @param {string} handle 用户名
+ * @param {number|undefined} persistedTimestamp 已持久化的活动时间
+ * @param {number} [now] 当前时间戳
+ * @returns {boolean} 是否在线
+ */
+export function isUserOnline(handle, persistedTimestamp, now = Date.now()) {
+    const latest = Number(getLatestUserActivity(handle, persistedTimestamp));
+    return Number.isFinite(latest) && latest > 0 && now - latest < ONLINE_USER_WINDOW_MS;
 }
 
 /**

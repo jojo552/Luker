@@ -23,8 +23,11 @@ import { openBrowserStorageInspector } from './browser-storage-inspector.js';
 export let currentUser = null;
 export let accountsEnabled = false;
 
-// Extend the session every 10 minutes
-const SESSION_EXTEND_INTERVAL = 10 * 60 * 1000;
+// Ping cadence: extends the session and doubles as the online-presence heartbeat.
+// Must stay well below the server-side online window (5 minutes, see ONLINE_USER_WINDOW_MS).
+const SESSION_EXTEND_INTERVAL = 60 * 1000;
+// Refresh cadence of the admin panel user list while it is open, keeping online badges near real-time.
+const ADMIN_PANEL_REFRESH_INTERVAL = 30 * 1000;
 const BACKUP_CATEGORY_KEYS = Object.freeze([
     'settings',
     'secrets',
@@ -2643,6 +2646,7 @@ async function openAdminPanel() {
         summary.append(
             $('<div class="flex-container flexFlowColumn flexNoGap"/>')
                 .append(`<div><strong>${t`Total users:`}</strong> ${overview.totals?.users ?? 0}</div>`)
+                .append(`<div><strong>${t`Online now:`}</strong> ${overview.totals?.onlineUsers ?? 0}</div>`)
                 .append(`<div><strong>${t`Enabled:`}</strong> ${overview.totals?.enabledUsers ?? 0}</div>`)
                 .append(`<div><strong>${t`Admins:`}</strong> ${overview.totals?.adminUsers ?? 0}</div>`)
                 .append(`<div><strong>${t`Password protected:`}</strong> ${overview.totals?.protectedUsers ?? 0}</div>`)
@@ -2661,6 +2665,7 @@ async function openAdminPanel() {
             const ratio = Number.isFinite(Number(user.storageUsageRatio)) ? Number(user.storageUsageRatio) : null;
             const suffix = ratio != null ? ` · ${t`${(ratio * 100).toFixed(1)}% of quota`}` : '';
             row.find('.overviewUserName').text(`${user.name} (${user.handle})`);
+            row.find('.overviewUserOnline').toggle(Boolean(user.online));
             row.find('.overviewUserMeta').text(`${user.admin ? t`Admin` : t`User`} · ${user.enabled ? t`Enabled` : t`Disabled`}${suffix}`);
             row.find('.overviewUserStorage').text(`${humanFileSize(user.storageBytes || 0)} / ${userQuota >= 0 ? humanFileSize(userQuota) : t`Unlimited`}`);
             usersList.append(row);
@@ -3190,6 +3195,7 @@ async function openAdminPanel() {
 
             userBlock.find('.userName').text(user.name);
             userBlock.find('.userHandle').text(user.handle);
+            userBlock.find('.userOnline').toggle(Boolean(user.online));
             userBlock.find('.userStatus').text(user.enabled ? t`Enabled` : t`Disabled`);
             userBlock.find('.userRole').text(user.admin ? t`Admin` : t`User`);
             userBlock.find('.userQuota').text(quotaLabel);
@@ -3449,7 +3455,15 @@ async function openAdminPanel() {
         });
     });
 
-    callGenericPopup(template, POPUP_TYPE.TEXT, '', { okButton: t`Close`, wide: false, large: false, allowVerticalScrolling: true, allowHorizontalScrolling: false });
+    // Refresh periodically while the panel is open so online badges stay near real-time.
+    // The popup promise always resolves on close, so the timer cannot leak.
+    const refreshTimer = setInterval(() => {
+        if (document.contains(template[0])) {
+            void renderUsers();
+        }
+    }, ADMIN_PANEL_REFRESH_INTERVAL);
+    void callGenericPopup(template, POPUP_TYPE.TEXT, '', { okButton: t`Close`, wide: false, large: false, allowVerticalScrolling: true, allowHorizontalScrolling: false })
+        .finally(() => clearInterval(refreshTimer));
     renderUsers();
 }
 

@@ -10,6 +10,8 @@ import {
     getPasswordHash,
     getPasswordSalt,
     initUserStorage,
+    isUserOnline,
+    ONLINE_USER_WINDOW_MS,
     resolveUserFromBasicAuth,
     toKey,
 } from '../src/users.js';
@@ -148,5 +150,30 @@ describe('resolveUserFromBasicAuth', () => {
             authorization: 'Basic',
         }, {}));
         expect(result).toBeNull();
+    });
+});
+
+describe('isUserOnline', () => {
+    const NOW = Date.parse('2026-09-14T00:00:00Z');
+
+    test('window 内有持久化活动时间即在线', () => {
+        expect(isUserOnline('alice', NOW - 60 * 1000, NOW)).toBe(true);
+    });
+
+    test('活动时间超出 window 则离线', () => {
+        expect(isUserOnline('alice', NOW - ONLINE_USER_WINDOW_MS - 1, NOW)).toBe(false);
+    });
+
+    test('活动时间恰好等于 window 边界时离线', () => {
+        expect(isUserOnline('alice', NOW - ONLINE_USER_WINDOW_MS, NOW)).toBe(false);
+    });
+
+    test('没有任何活动时间记录时离线', () => {
+        expect(isUserOnline('alice', undefined, NOW)).toBe(false);
+    });
+
+    test('活动时间非法时离线', () => {
+        expect(isUserOnline('alice', Number.NaN, NOW)).toBe(false);
+        expect(isUserOnline('alice', 0, NOW)).toBe(false);
     });
 });

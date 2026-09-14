@@ -26,6 +26,8 @@ import {
     ensurePublicDirectoriesExist,
     restartInactiveUserCleanup,
     getLatestUserActivity,
+    isUserOnline,
+    ONLINE_USER_WINDOW_MS,
 } from '../users.js';
 import {
     resolvePath,
@@ -313,6 +315,7 @@ router.post('/overview', requireAdminMiddleware, async (_request, response) => {
                 created: user.created,
                 lastLogin: user.lastLogin,
                 lastActivity: getLatestUserActivity(user.handle, user.lastActivity),
+                online: isUserOnline(user.handle, user.lastActivity),
                 storageBytes: storageBytes,
                 storageQuotaBytes: effectiveQuotaBytes,
                 storageUsageRatio: effectiveQuotaBytes >= 0 ? storageBytes / Math.max(effectiveQuotaBytes, 1) : null,
@@ -326,6 +329,7 @@ router.post('/overview', requireAdminMiddleware, async (_request, response) => {
             enabledUsers: usersWithStats.filter(x => x.enabled).length,
             adminUsers: usersWithStats.filter(x => x.admin).length,
             protectedUsers: usersWithStats.filter(x => x.password).length,
+            onlineUsers: usersWithStats.filter(x => x.online).length,
             storageBytes: usersWithStats.reduce((acc, user) => acc + user.storageBytes, 0),
             overQuotaUsers: usersWithStats.filter(x => x.storageQuotaBytes >= 0 && x.storageBytes > x.storageQuotaBytes).length,
         };
@@ -344,6 +348,7 @@ router.post('/overview', requireAdminMiddleware, async (_request, response) => {
                 now: Date.now(),
             },
             totals,
+            onlineWindowMs: ONLINE_USER_WINDOW_MS,
             settings: adminSettings,
             inactiveUserCleanup: {
                 enabled: getConfigValue('inactiveUserCleanup.enabled', false, 'boolean'),
@@ -777,6 +782,7 @@ router.post('/get', requireAdminMiddleware, async (_request, response) => {
                         created: user.created,
                         lastLogin: user.lastLogin,
                         lastActivity: getLatestUserActivity(user.handle, user.lastActivity),
+                        online: isUserOnline(user.handle, user.lastActivity),
                         password: !!user.password,
                         storageQuotaBytes: Number.isFinite(Number(user.storageQuotaBytes)) ? Number(user.storageQuotaBytes) : null,
                         oauthProviders: Object.keys(user.oauth || {}),

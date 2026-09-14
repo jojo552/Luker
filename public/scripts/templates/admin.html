@@ -54,6 +54,7 @@
                 <div class="flex-container flexGap10 alignItemsCenter">
                     <i class="hasPassword fa-solid fa-lock" title="This account is password protected." data-i18n="[title]This account is password protected."></i>
                     <i class="noPassword fa-solid fa-lock-open" title="This account is not password protected." data-i18n="[title]This account is not password protected."></i>
+                    <i class="userOnline fa-solid fa-circle" style="color: #3ba55d; font-size: 0.6em;" title="Online" data-i18n="[title]Online"></i>
                     <h3 class="userName margin0"></h3>
                     <small class="userHandle">&nbsp;</small>
                 </div>
@@ -108,7 +109,10 @@
     <div class="adminOverviewUserTemplate template_element">
         <div class="adminOverviewUser flex-container alignItemsCenter spaceBetween flexGap10">
             <div class="flex-container flexFlowColumn flexNoGap">
-                <strong class="overviewUserName"></strong>
+                <span class="flex-container flexGap5 alignItemsCenter">
+                    <i class="overviewUserOnline fa-solid fa-circle" style="color: #3ba55d; font-size: 0.6em;" title="Online" data-i18n="[title]Online"></i>
+                    <strong class="overviewUserName"></strong>
+                </span>
                 <small class="overviewUserMeta"></small>
             </div>
             <div class="overviewUserStorage"></div>
