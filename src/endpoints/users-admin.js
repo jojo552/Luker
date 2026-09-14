@@ -18,7 +18,6 @@ import {
     KEY_PREFIX,
     toKey,
     requireAdminMiddleware,
-    getUserAvatar,
     getAllUserHandles,
     getPasswordSalt,
     getPasswordHash,
@@ -764,37 +763,66 @@ function slugify(text) {
     return lodash.deburr(String(text ?? '').toLowerCase().trim()).replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
 }
 
-router.post('/get', requireAdminMiddleware, async (_request, response) => {
+router.post('/get', requireAdminMiddleware, async (request, response) => {
+    try {
+        const page = Math.max(1, Math.floor(Number(request.body?.page)) || 1);
+        const pageSize = Math.min(100, Math.max(1, Math.floor(Number(request.body?.pageSize)) || 20));
+        const query = String(request.body?.query ?? '').trim().toLowerCase();
+
+        /** @type {import('../users.js').User[]} */
+        let users = await storage.values(x => x.key.startsWith(KEY_PREFIX));
+
+        if (query) {
+            users = users.filter(user =>
+                String(user.handle).toLowerCase().includes(query)
+                || String(user.name ?? '').toLowerCase().includes(query),
+            );
+        }
+
+        users.sort((x, y) => (x.created ?? 0) - (y.created ?? 0));
+
+        const total = users.length;
+        const pageCount = Math.max(1, Math.ceil(total / pageSize));
+        const safePage = Math.min(page, pageCount);
+        const pageUsers = users.slice((safePage - 1) * pageSize, safePage * pageSize);
+
+        // 头像只返回 URL，由浏览器按需加载，避免列表负载随用户数膨胀。
+        /** @type {import('../users.js').UserViewModel[]} */
+        const viewModels = pageUsers.map(user => ({
+            handle: user.handle,
+            name: user.name,
+            avatar: `/api/users/avatar/${encodeURIComponent(user.handle)}`,
+            admin: user.admin,
+            enabled: user.enabled,
+            created: user.created,
+            lastLogin: user.lastLogin,
+            lastActivity: getLatestUserActivity(user.handle, user.lastActivity),
+            online: isUserOnline(user.handle, user.lastActivity),
+            password: !!user.password,
+            storageQuotaBytes: Number.isFinite(Number(user.storageQuotaBytes)) ? Number(user.storageQuotaBytes) : null,
+            oauthProviders: Object.keys(user.oauth || {}),
+        }));
+
+        return response.json({ users: viewModels, total, page: safePage, pageSize, pageCount });
+    } catch (error) {
+        console.error('User list failed:', error);
+        return response.sendStatus(500);
+    }
+});
+
+/**
+ * 轻量在线状态轮询：只返回在线用户名集合，供管理面板原地更新标记，不做整表重渲染。
+ */
+router.post('/online', requireAdminMiddleware, async (_request, response) => {
     try {
         /** @type {import('../users.js').User[]} */
         const users = await storage.values(x => x.key.startsWith(KEY_PREFIX));
-
-        /** @type {Promise<import('../users.js').UserViewModel>[]} */
-        const viewModelPromises = users
-            .map(user => new Promise(resolve => {
-                getUserAvatar(user.handle).then(avatar =>
-                    resolve({
-                        handle: user.handle,
-                        name: user.name,
-                        avatar: avatar,
-                        admin: user.admin,
-                        enabled: user.enabled,
-                        created: user.created,
-                        lastLogin: user.lastLogin,
-                        lastActivity: getLatestUserActivity(user.handle, user.lastActivity),
-                        online: isUserOnline(user.handle, user.lastActivity),
-                        password: !!user.password,
-                        storageQuotaBytes: Number.isFinite(Number(user.storageQuotaBytes)) ? Number(user.storageQuotaBytes) : null,
-                        oauthProviders: Object.keys(user.oauth || {}),
-                    }),
-                );
-            }));
-
-        const viewModels = await Promise.all(viewModelPromises);
-        viewModels.sort((x, y) => (x.created ?? 0) - (y.created ?? 0));
-        return response.json(viewModels);
+        const online = users
+            .filter(user => isUserOnline(user.handle, user.lastActivity))
+            .map(user => user.handle);
+        return response.json({ online, count: online.length, onlineWindowMs: ONLINE_USER_WINDOW_MS });
     } catch (error) {
-        console.error('User list failed:', error);
+        console.error('Online user list failed:', error);
         return response.sendStatus(500);
     }
 });

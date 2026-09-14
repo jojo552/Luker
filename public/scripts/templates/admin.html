@@ -36,7 +36,7 @@
         <div class="flex-container userAccount alignItemsCenter flexGap10">
             <div class="flex-container flexFlowColumn alignItemsCenter flexNoGap">
                 <div class="avatar" title="If a custom avatar is not set, the user's default persona image will be displayed." data-i18n="[title]If a custom avatar is not set, the user's default persona image will be displayed.">
-                    <img src="img/ai4.png" alt="avatar">
+                    <img src="img/ai4.png" alt="avatar" loading="lazy" decoding="async">
                 </div>
                 <div class="flex-container alignItemsCenter">
                     <div class="userAvatarChange right_menu_button" title="Set a custom avatar." data-i18n="[title]Set a custom avatar.">
@@ -104,7 +104,19 @@
         </div>
     </div>
 
-    <div class="navTab usersList flex-container flexFlowColumn"></div>
+    <div class="navTab usersList flex-container flexFlowColumn flexGap10">
+        <div class="usersListControls flex-container flexGap10 alignItemsCenter">
+            <input type="search" class="usersSearchInput text_pole flex1 margin0" placeholder="Search users" data-i18n="[placeholder]Search users">
+            <div class="usersPrevPage menu_button" title="Previous page" data-i18n="[title]Previous page">
+                <i class="fa-fw fa-solid fa-chevron-left"></i>
+            </div>
+            <span class="usersPageInfo"></span>
+            <div class="usersNextPage menu_button" title="Next page" data-i18n="[title]Next page">
+                <i class="fa-fw fa-solid fa-chevron-right"></i>
+            </div>
+        </div>
+        <div class="usersListItems flex-container flexFlowColumn"></div>
+    </div>
 
     <div class="adminOverviewUserTemplate template_element">
         <div class="adminOverviewUser flex-container alignItemsCenter spaceBetween flexGap10">

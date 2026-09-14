@@ -80,7 +80,7 @@ const USER_ACTIVITY_WRITE_QUEUES = new Map();
 let USER_ACTIVITY_FLUSH_TIMER = null;
 /** @type {Promise<void>|null} */
 let USER_ACTIVITY_FLUSH_PROMISE = null;
-const PUBLIC_USER_AVATAR = '/img/user-default.png';
+export const PUBLIC_USER_AVATAR = '/img/user-default.png';
 const COOKIE_SECRET_PATH = 'cookie-secret.txt';
 
 const STORAGE_KEYS = {

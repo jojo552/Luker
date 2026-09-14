@@ -7,7 +7,7 @@ import { getIpAddress, retryAfter } from '../express-common.js';
 import { color, Cache, getConfigValue } from '../util.js';
 import { getAdminSettings } from '../admin-settings.js';
 import { checkForNewContent, CONTENT_TYPES } from './content-manager.js';
-import { KEY_PREFIX, getUserAvatar, toKey, toAvatarKey, getPasswordHash, getPasswordSalt, getAccountVersion, getAllUserHandles, getUserDirectories, ensurePublicDirectoriesExist, createBackupArchive, recordUserLogin } from '../users.js';
+import { KEY_PREFIX, getUserAvatar, toKey, toAvatarKey, getPasswordHash, getPasswordSalt, getAccountVersion, getAllUserHandles, getUserDirectories, ensurePublicDirectoriesExist, createBackupArchive, recordUserLogin, PUBLIC_USER_AVATAR } from '../users.js';
 import { consumeLanMigrationOffer } from '../lan-migration.js';
 
 const DISCREET_LOGIN = getConfigValue('enableDiscreetLogin', false, 'boolean');
@@ -603,6 +603,35 @@ router.get('/oauth/callback/:provider', async (request, response) => {
     }
 });
 
+/**
+ * 以二进制图片形式提供用户头像，避免在列表接口中内联 base64。
+ * 谨慎登录模式下只回默认头像，避免借此枚举用户名是否存在。
+ */
+router.get('/avatar/:handle', async (request, response) => {
+    try {
+        const avatar = DISCREET_LOGIN
+            ? PUBLIC_USER_AVATAR
+            : await getUserAvatar(String(request.params.handle || ''));
+
+        if (!avatar.startsWith('data:')) {
+            return response.redirect(avatar);
+        }
+
+        const mimeMatch = /^data:([^;,]+);base64,/.exec(avatar);
+        if (!mimeMatch) {
+            return response.redirect(PUBLIC_USER_AVATAR);
+        }
+
+        const buffer = Buffer.from(avatar.slice(mimeMatch[0].length), 'base64');
+        response.setHeader('Content-Type', mimeMatch[1]);
+        response.setHeader('Cache-Control', 'public, max-age=300');
+        return response.end(buffer);
+    } catch (error) {
+        console.error('User avatar fetch failed:', error);
+        return response.redirect(PUBLIC_USER_AVATAR);
+    }
+});
+
 router.post('/list', async (_request, response) => {
     try {
         if (DISCREET_LOGIN) {
@@ -612,24 +641,20 @@ router.post('/list', async (_request, response) => {
         /** @type {import('../users.js').User[]} */
         const users = await storage.values(x => x.key.startsWith(KEY_PREFIX));
 
-        /** @type {Promise<import('../users.js').UserViewModel>[]} */
-        const viewModelPromises = users
+        // 头像只返回 URL，由浏览器按需并发加载，避免列表负载随用户数膨胀。
+        /** @type {import('../users.js').UserViewModel[]} */
+        const viewModels = users
             .filter(x => x.enabled)
-            .map(user => new Promise(async (resolve) => {
-                getUserAvatar(user.handle).then(avatar =>
-                    resolve({
-                        handle: user.handle,
-                        name: user.name,
-                        created: user.created,
-                        lastActivity: user.lastActivity,
-                        avatar: avatar,
-                        password: !!user.password,
-                        oauthProviders: Object.keys(user.oauth || {}),
-                    }),
-                );
+            .map(user => ({
+                handle: user.handle,
+                name: user.name,
+                created: user.created,
+                lastActivity: user.lastActivity,
+                avatar: `/api/users/avatar/${encodeURIComponent(user.handle)}`,
+                password: !!user.password,
+                oauthProviders: Object.keys(user.oauth || {}),
             }));
 
-        const viewModels = await Promise.all(viewModelPromises);
         viewModels.sort((x, y) => (x.created ?? 0) - (y.created ?? 0));
         return response.json(viewModels);
     } catch (error) {

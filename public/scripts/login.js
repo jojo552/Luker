@@ -391,7 +391,7 @@ function configureNormalLogin(userList) {
     for (const user of userList) {
         const userBlock = $('<div></div>').addClass('userSelect');
         const avatarBlock = $('<div></div>').addClass('avatar');
-        avatarBlock.append($('<img>').attr('src', user.avatar));
+        avatarBlock.append($('<img>').attr('src', user.avatar).attr('loading', 'lazy').attr('decoding', 'async'));
         userBlock.append(avatarBlock);
         userBlock.append($('<span></span>').addClass('userName').text(user.name));
         userBlock.append($('<small></small>').addClass('userHandle').text(user.handle));

@@ -28,6 +28,10 @@ export let accountsEnabled = false;
 const SESSION_EXTEND_INTERVAL = 60 * 1000;
 // Refresh cadence of the admin panel user list while it is open, keeping online badges near real-time.
 const ADMIN_PANEL_REFRESH_INTERVAL = 30 * 1000;
+// Page size of the admin panel user list.
+const ADMIN_USERS_PAGE_SIZE = 20;
+// Cache-buster for avatar URLs, bumped whenever an avatar is changed from this session.
+let avatarCacheBust = Date.now();
 const BACKUP_CATEGORY_KEYS = Object.freeze([
     'settings',
     'secrets',
@@ -213,14 +217,17 @@ async function getCurrentUser() {
 }
 
 /**
- * Get a list of all users.
- * @returns {Promise<import('../../src/users.js').UserViewModel[]>} Users
+ * Get a paginated list of users.
+ * @param {number} page 1-based page index
+ * @param {string} query Handle/name filter
+ * @returns {Promise<{users: import('../../src/users.js').UserViewModel[], total: number, page: number, pageSize: number, pageCount: number}|undefined>} Page payload
  */
-async function getUsers() {
+async function getUsers(page = 1, query = '') {
     try {
         const response = await fetch('/api/users/get', {
             method: 'POST',
-            headers: getRequestHeaders({ omitContentType: true }),
+            headers: getRequestHeaders(),
+            body: JSON.stringify({ page, pageSize: ADMIN_USERS_PAGE_SIZE, query }),
         });
 
         if (!response.ok) {
@@ -2646,7 +2653,7 @@ async function openAdminPanel() {
         summary.append(
             $('<div class="flex-container flexFlowColumn flexNoGap"/>')
                 .append(`<div><strong>${t`Total users:`}</strong> ${overview.totals?.users ?? 0}</div>`)
-                .append(`<div><strong>${t`Online now:`}</strong> ${overview.totals?.onlineUsers ?? 0}</div>`)
+                .append(`<div><strong>${t`Online now:`}</strong> <span class="onlineUsersCount">${overview.totals?.onlineUsers ?? 0}</span></div>`)
                 .append(`<div><strong>${t`Enabled:`}</strong> ${overview.totals?.enabledUsers ?? 0}</div>`)
                 .append(`<div><strong>${t`Admins:`}</strong> ${overview.totals?.adminUsers ?? 0}</div>`)
                 .append(`<div><strong>${t`Password protected:`}</strong> ${overview.totals?.protectedUsers ?? 0}</div>`)
@@ -2661,6 +2668,7 @@ async function openAdminPanel() {
 
         for (const user of overview.users || []) {
             const row = template.find('.adminOverviewUserTemplate .adminOverviewUser').clone();
+            row.attr('data-handle', user.handle);
             const userQuota = Number(user.storageQuotaBytes);
             const ratio = Number.isFinite(Number(user.storageUsageRatio)) ? Number(user.storageUsageRatio) : null;
             const suffix = ratio != null ? ` · ${t`${(ratio * 100).toFixed(1)}% of quota`}` : '';
@@ -3185,11 +3193,24 @@ async function openAdminPanel() {
         });
     }
 
+    let usersPage = 1;
+    let usersQuery = '';
+
     async function renderUsers() {
-        const users = await getUsers();
-        template.find('.usersList').empty();
-        for (const user of users) {
+        const data = await getUsers(usersPage, usersQuery);
+        if (!data) {
+            return;
+        }
+
+        usersPage = data.page;
+        template.find('.usersListItems').empty();
+        template.find('.usersPageInfo').text(`${data.page} / ${data.pageCount} (${data.total})`);
+        template.find('.usersPrevPage').toggleClass('disabled', data.page <= 1);
+        template.find('.usersNextPage').toggleClass('disabled', data.page >= data.pageCount);
+
+        for (const user of data.users) {
             const userBlock = template.find('.userAccountTemplate .userAccount').clone();
+            userBlock.attr('data-handle', user.handle);
             const quotaLabel = user.storageQuotaBytes == null ? t`Default` : humanFileSize(Number(user.storageQuotaBytes));
             const oauthProviders = Array.isArray(user.oauthProviders) && user.oauthProviders.length ? user.oauthProviders.join(', ') : t`None`;
 
@@ -3200,7 +3221,7 @@ async function openAdminPanel() {
             userBlock.find('.userRole').text(user.admin ? t`Admin` : t`User`);
             userBlock.find('.userQuota').text(quotaLabel);
             userBlock.find('.userOAuth').text(oauthProviders);
-            userBlock.find('.avatar img').attr('src', user.avatar);
+            userBlock.find('.avatar img').attr('src', `${user.avatar}?t=${avatarCacheBust}`);
             userBlock.find('.hasPassword').toggle(user.password);
             userBlock.find('.noPassword').toggle(!user.password);
             userBlock.find('.userCreated').text(new Date(user.created).toLocaleString());
@@ -3235,16 +3256,43 @@ async function openAdminPanel() {
                 }
 
                 await cropAndUploadAvatar(user.handle, file);
+                avatarCacheBust = Date.now();
                 renderUsers();
             });
             userBlock.find('.userAvatarRemove').on('click', async function () {
                 await changeAvatar(user.handle, '');
+                avatarCacheBust = Date.now();
                 renderUsers();
             });
-            template.find('.usersList').append(userBlock);
+            template.find('.usersListItems').append(userBlock);
         }
+    }
 
-        await renderOverview();
+    /**
+     * 轻量在线状态轮询：原地切换在线标记并更新在线人数，不整表重渲染。
+     */
+    async function refreshOnlineStatus() {
+        try {
+            const response = await fetch('/api/users/online', {
+                method: 'POST',
+                headers: getRequestHeaders({ omitContentType: true }),
+            });
+            if (!response.ok) {
+                return;
+            }
+
+            const data = await response.json();
+            const onlineSet = new Set(data.online || []);
+            template.find('.userAccount').each(function () {
+                $(this).find('.userOnline').toggle(onlineSet.has(String($(this).attr('data-handle'))));
+            });
+            template.find('.adminOverviewUser').each(function () {
+                $(this).find('.overviewUserOnline').toggle(onlineSet.has(String($(this).attr('data-handle'))));
+            });
+            template.find('.onlineUsersCount').text(data.count ?? 0);
+        } catch (error) {
+            console.error('Failed to refresh online status:', error);
+        }
     }
 
     const template = $(await renderTemplateAsync('admin'));
@@ -3273,6 +3321,26 @@ async function openAdminPanel() {
     });
 
     template.find('.overviewRefreshButton').on('click', renderOverview);
+
+    template.find('.usersPrevPage').on('click', () => {
+        if (usersPage > 1) {
+            usersPage--;
+            void renderUsers();
+        }
+    });
+    template.find('.usersNextPage').on('click', () => {
+        usersPage++;
+        void renderUsers();
+    });
+    let usersSearchTimer;
+    template.find('.usersSearchInput').on('input', function () {
+        clearTimeout(usersSearchTimer);
+        usersSearchTimer = setTimeout(() => {
+            usersQuery = String($(this).val() ?? '').trim();
+            usersPage = 1;
+            void renderUsers();
+        }, 300);
+    });
     template.find('.refreshServerPluginsButton').on('click', renderServerPlugins);
     template.find('.storageBackendRefreshButton').on('click', renderStorageBackend);
 
@@ -3455,16 +3523,18 @@ async function openAdminPanel() {
         });
     });
 
-    // Refresh periodically while the panel is open so online badges stay near real-time.
+    // Refresh online badges periodically while the panel is open. The lightweight poll
+    // avoids re-rendering the list and avoids the disk-scanning overview endpoint.
     // The popup promise always resolves on close, so the timer cannot leak.
     const refreshTimer = setInterval(() => {
         if (document.contains(template[0])) {
-            void renderUsers();
+            void refreshOnlineStatus();
         }
     }, ADMIN_PANEL_REFRESH_INTERVAL);
     void callGenericPopup(template, POPUP_TYPE.TEXT, '', { okButton: t`Close`, wide: false, large: false, allowVerticalScrolling: true, allowHorizontalScrolling: false })
         .finally(() => clearInterval(refreshTimer));
     renderUsers();
+    renderOverview();
 }
 
 
