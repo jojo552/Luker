@@ -95,3 +95,21 @@
 .configEditorTab .runtimeConfigPath {
     word-break: break-all;
 }
+
+/* 管理面板用户分页栏：紧凑化以适配移动端窄屏 */
+.usersListControls .menu_button {
+    margin: 0;
+    padding: 3px 4px;
+}
+
+.usersListControls .usersPageInput {
+    width: 3.2em;
+    text-align: center;
+}
+
+/* 超小屏幕隐藏总人数，保证按钮不换行 */
+@media screen and (max-width: 450px) {
+    .usersListControls .usersPageTotalCount {
+        display: none;
+    }
+}

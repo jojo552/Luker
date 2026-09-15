@@ -3212,7 +3212,8 @@ async function openAdminPanel() {
         if (document.activeElement !== pageInput[0]) {
             pageInput.val(data.page);
         }
-        template.find('.usersPageTotal').text(`\u00A0/ ${data.pageCount} (${data.total})`);
+        template.find('.usersPageTotal').text(`\u00A0/ ${data.pageCount}`);
+        template.find('.usersPageTotalCount').text(`\u00A0(${data.total})`);
         template.find('.usersFirstPage').toggleClass('disabled', data.page <= 1);
         template.find('.usersPrevPage').toggleClass('disabled', data.page <= 1);
         template.find('.usersNextPage').toggleClass('disabled', data.page >= data.pageCount);
