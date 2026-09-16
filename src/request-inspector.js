@@ -30,84 +30,12 @@ const REQUEST_INSPECTOR_CLEANUP_INTERVAL_MS = readPositiveIntegerEnv(
 
 /** @type {Map<string, InspectorEntry[]>} handle -> entries */
 const buffers = new Map();
-let expiredEntriesRemoved = 0;
 
 function getBuffer(handle) {
  if (!buffers.has(handle)) {
  buffers.set(handle, []);
  }
  return buffers.get(handle);
-}
-
-/**
- * 返回不包含用户内容的 Inspector 聚合统计，供内存诊断使用。
- * contentChars 只统计文本长度，不代表 JavaScript 对象的完整堆占用。
- * @returns {object}
- */
-export function getRequestInspectorStats() {
- const byType = {};
- const byStatus = {};
- let entries = 0;
- let contentChars = 0;
- let fullMessageEntries = 0;
- let wireRequestEntries = 0;
- let oldestTimestamp = null;
- let newestTimestamp = null;
-
- for (const buffer of buffers.values()) {
- for (const entry of buffer) {
- entries++;
- byType[entry.type] = (byType[entry.type] || 0) + 1;
- byStatus[entry.status] = (byStatus[entry.status] || 0) + 1;
-
- if (Array.isArray(entry.fullMessages)) {
- fullMessageEntries++;
- }
- if (entry.wireRequest && typeof entry.wireRequest === 'object') {
- wireRequestEntries++;
- }
-
- if (Number.isFinite(entry.promptCharLength)) {
- contentChars += entry.promptCharLength;
- }
- if (typeof entry.responseText === 'string') {
- contentChars += entry.responseText.length;
- }
- if (typeof entry.prompt === 'string') {
- contentChars += entry.prompt.length;
- }
- if (typeof entry.negativePrompt === 'string') {
- contentChars += entry.negativePrompt.length;
- }
- if (Number.isFinite(entry.inputCharTotal)) {
- contentChars += entry.inputCharTotal;
- }
- if (typeof entry.query === 'string') {
- contentChars += entry.query.length;
- }
-
- const timestamp = Number(entry.timestamp);
- if (Number.isFinite(timestamp)) {
- if (oldestTimestamp === null || timestamp < oldestTimestamp) oldestTimestamp = timestamp;
- if (newestTimestamp === null || timestamp > newestTimestamp) newestTimestamp = timestamp;
- }
- }
- }
-
- const now = Date.now();
- return {
- bufferUsers: buffers.size,
- entries,
- byType,
- byStatus,
- fullMessageEntries,
- wireRequestEntries,
- contentChars,
- estimatedTextBytes: contentChars * 2,
- oldestAgeMs: oldestTimestamp === null ? null : Math.max(0, now - oldestTimestamp),
- newestAgeMs: newestTimestamp === null ? null : Math.max(0, now - newestTimestamp),
- expiredEntriesRemoved,
- };
 }
 
 /**
@@ -161,7 +89,6 @@ export function cleanupExpiredEntries(now = Date.now()) {
  }
  }
 
- expiredEntriesRemoved += removed;
  return removed;
 }
 

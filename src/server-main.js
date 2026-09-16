@@ -126,7 +126,6 @@ import {
 } from './util.js';
 import { installLogCapture } from './log-capture.js';
 import { getBufferForHandle as getInspectorBufferForHandle } from './request-inspector.js';
-import { startMemoryDiagnostics } from './memory-diagnostics.js';
 import {
     UPLOADS_DIRECTORY,
     SERVER_PLUGINS_DIRECTORY,
@@ -943,7 +942,4 @@ initUserStorage(globalThis.DATA_ROOT)
     .then(apply404Middleware)
     .then(() => new ServerStartup(app, cliArgs).start())
     .then(postSetupTasks)
-    .then(() => {
-        startMemoryDiagnostics();
-        return startInactiveUserCleanup();
-    });
+    .then(() => startInactiveUserCleanup());

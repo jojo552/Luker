@@ -834,19 +834,6 @@ export function isUserOnline(handle, persistedTimestamp, now = Date.now()) {
 }
 
 /**
- * 返回活动时间异步持久化的聚合统计，不包含用户标识。
- * @returns {{pendingUsers: number, queuedWrites: number, flushInProgress: boolean, flushTimerActive: boolean}}
- */
-export function getUserActivityStats() {
-    return {
-        pendingUsers: PENDING_USER_ACTIVITY.size,
-        queuedWrites: USER_ACTIVITY_WRITE_QUEUES.size,
-        flushInProgress: Boolean(USER_ACTIVITY_FLUSH_PROMISE),
-        flushTimerActive: Boolean(USER_ACTIVITY_FLUSH_TIMER),
-    };
-}
-
-/**
  * 更新用户的最后活动时间。请求路径只更新内存，不等待磁盘写入；后台会合并刷新。
  * @param {User} user 当前用户
  * @returns {void}
