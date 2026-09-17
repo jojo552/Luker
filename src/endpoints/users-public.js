@@ -605,13 +605,18 @@ router.get('/oauth/callback/:provider', async (request, response) => {
 
 /**
  * 以二进制图片形式提供用户头像，避免在列表接口中内联 base64。
- * 谨慎登录模式下只回默认头像，避免借此枚举用户名是否存在。
+ * 谨慎登录模式下，匿名请求只回默认头像（避免借此枚举用户名）；
+ * 已登录的管理员或本人仍可拿到真实头像（管理面板/个人页需要）。
  */
 router.get('/avatar/:handle', async (request, response) => {
     try {
-        const avatar = DISCREET_LOGIN
+        const handle = String(request.params.handle || '');
+        const viewer = request.user?.profile;
+        const isPrivileged = Boolean(viewer && (viewer.admin || viewer.handle === handle));
+
+        const avatar = (DISCREET_LOGIN && !isPrivileged)
             ? PUBLIC_USER_AVATAR
-            : await getUserAvatar(String(request.params.handle || ''));
+            : await getUserAvatar(handle);
 
         if (!avatar.startsWith('data:')) {
             return response.redirect(avatar);
@@ -624,7 +629,8 @@ router.get('/avatar/:handle', async (request, response) => {
 
         const buffer = Buffer.from(avatar.slice(mimeMatch[0].length), 'base64');
         response.setHeader('Content-Type', mimeMatch[1]);
-        response.setHeader('Cache-Control', 'public, max-age=300');
+        // 真实头像只对登录者可见（谨慎模式下）：禁止共享缓存（CDN/反代）避免把匿名默认头像缓存给管理员
+        response.setHeader('Cache-Control', 'private, max-age=300');
         return response.end(buffer);
     } catch (error) {
         console.error('User avatar fetch failed:', error);
