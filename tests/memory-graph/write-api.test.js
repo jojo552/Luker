@@ -54,7 +54,7 @@ const extensionSettingsMock = { memory_graph: {} };
 
 // public/lib.js pulls in a webpack-bundled file that can't be resolved under
 // jest. Stub to the bare set of exports memory-graph reaches for at import
-// time (the same shim used by mg-schema-iteration tests).
+// time (the same shim used by mg-config-iteration tests).
 jest.unstable_mockModule('../../public/lib.js', async () => {
     const { default: lodash } = await import('lodash');
     return {
@@ -109,8 +109,8 @@ jest.unstable_mockModule('../../public/scripts/extensions.js', () => ({
     UNSET_VALUE: Symbol('UNSET_VALUE'),
 }));
 
-jest.unstable_mockModule('../../public/scripts/extensions/memory-graph/schema-iteration/studio.js', () => ({
-    openSchemaIterationStudio: () => Promise.resolve(),
+jest.unstable_mockModule('../../public/scripts/extensions/memory-graph/config-iteration/studio.js', () => ({
+    openConfigIterationStudio: () => Promise.resolve(),
 }));
 
 jest.unstable_mockModule('../../public/scripts/extensions/memory-graph/graph-iteration/studio.js', () => ({

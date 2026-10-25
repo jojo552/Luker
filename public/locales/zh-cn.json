@@ -458,6 +458,7 @@
     "Leave empty to use the official endpoint. Fill with a compatible server URL to route through it. The API key from the section above is used as-is.": "留空则走官方端点。填入兼容服务器 URL 即可通过它转发，密钥直接复用上方密钥栏的值。",
     "Legacy Proxy Presets (Deprecated)": "旧版反向代理预设（已弃用）",
     "Older proxy presets are kept for migration. New configurations should use the Base URL field above.": "旧版反向代理预设保留以便迁移，新配置请使用上方的 Base URL 字段。",
+    "Base URL and a legacy Proxy Server URL are both set. The proxy URL takes precedence and Base URL is ignored.": "Base URL 与旧版代理服务器 URL 同时存在。代理 URL 优先生效，Base URL 会被忽略。",
     "Proxy Presets": "代理预设",
     "Saved addresses and passwords.": "保存的地址和密码。",
     "Save Proxy": "保存代理",
@@ -962,6 +963,10 @@
     "Swipes": "刷新回复按钮",
     "Allow using swiping gestures on the last in-chat message to trigger swipe generation. Mobile only, no effect on PC": "允许在最后一条聊天消息上使用滑动手势触发滑动生成。仅适用于移动设备，对PC无影响",
     "Gestures": "手势",
+    "Swipe gestures": "滑动刷新回复",
+    "Swipe the last message to generate another reply.": "在最后一条消息上滑动，生成另一条回复。",
+    "Use the left and right arrow keys to swipe the last message.": "使用左右方向键刷新最后一条回复。",
+    "Arrow key swipes": "方向键刷新回复",
     "Auto-load Last Chat": "自动加载上次聊天",
     "Auto-scroll Chat": "自动滚动聊天",
     "Save edits to messages without confirmation as you type": "在键入时保存对消息的编辑而无需确认",
@@ -5746,8 +5751,6 @@
     ,"Completion Preset Assistant — AI iteration": "聊天补全预设助手 — AI 迭代"
     ,"Describe what to change in the preset...": "描述要修改的预设内容..."
     ,"Clear all session history for this preset?": "清空该预设的所有会话历史？"
-    ,"Memory Graph Schema Studio": "记忆图谱 Schema 工作台"
-    ,"Describe what to change in the schema...": "描述要修改的 Schema 内容..."
     ,"AI Iteration Studio": "AI 迭代工作台"
     ,"AI Iteration Studio — Spec": "AI 迭代工作台 — Spec"
     ,"AI Iteration Studio — Loop": "AI 迭代工作台 — Loop"

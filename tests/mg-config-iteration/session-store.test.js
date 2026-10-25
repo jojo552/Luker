@@ -15,7 +15,7 @@ import {
     MG_GLOBAL_BUCKET_KEY,
     MG_SIDECAR_NAMESPACE,
     normalizeMessageShape,
-} from '../../public/scripts/extensions/memory-graph/schema-iteration/session-store.js';
+} from '../../public/scripts/extensions/memory-graph/config-iteration/session-store.js';
 
 function makeSidecarCtx() {
     const sidecars = Object.create(null);

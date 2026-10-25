@@ -17,6 +17,13 @@ import {
     renderReasoningItem,
     renderReasoningItems,
 } from './request-inspector-reasoning.js';
+import {
+    describeImagePart,
+    elideBase64Json,
+    extractMessageImages,
+    imageToHtml,
+    responsePartToImage,
+} from './request-inspector-images.js';
 
 const MODULE_NAME = 'RequestInspector';
 let cachedList = [];
@@ -140,21 +147,13 @@ function formatMessageContent(content) {
             parts.push(String(part.text ?? ''));
             continue;
         }
-        if (part.type === 'image_url' || part.type === 'input_image') {
-            const url = typeof part.image_url === 'string' ? part.image_url : (part.image_url?.url || '');
-            if (url.startsWith('data:')) {
-                const mime = url.slice(5, url.indexOf(';')) || 'data';
-                parts.push(`[image: ${mime}]`);
-            } else if (url) {
-                parts.push(`[image: ${url.slice(0, 80)}${url.length > 80 ? '…' : ''}]`);
-            } else {
-                parts.push('[image]');
-            }
-            continue;
-        }
-        if (part.type === 'image' && part.source) {
-            const media = part.source.media_type || part.source.type || 'image';
-            parts.push(`[image: ${media}]`);
+        // Image parts across every provider dialect (OpenAI image_url /
+        // input_image, Claude image+source, Gemini inlineData / fileData)
+        // render as a compact marker; the actual previews are lazy-mounted
+        // onto the enclosing details element by bindLazyImagePreviews.
+        const imageDesc = describeImagePart(part);
+        if (imageDesc) {
+            parts.push(imageDesc);
             continue;
         }
         if (part.type === 'tool_use') {
@@ -327,6 +326,11 @@ function buildResponseBodyHtml(detail, q) {
             // emits reasoning parts in the same shape as extractMessageReasoning
             // uses; renderReasoningItem consumes both with no adapter.
             blocks.push(renderReasoningItem(part, q, t));
+        } else if (part?.type === 'image') {
+            // Gemini image output, normalized server-side to
+            // {type:'image', mime, data} — render the actual image.
+            const image = responsePartToImage(part);
+            if (image) blocks.push(`<div class="ri-msg-images ri-response-images">${imageToHtml(image)}</div>`);
         } else if (part?.type === 'text' && part.text) {
             blocks.push(`<pre class="ri-msg-content ri-response-body">${highlightHtml(part.text, q)}</pre>`);
         }
@@ -336,6 +340,40 @@ function buildResponseBodyHtml(detail, q) {
         return `<pre class="ri-msg-content ri-response-body">${escapeHtml(t`(empty)`)}</pre>`;
     }
     return blocks.join('\n');
+}
+
+// Images extracted during a detail render, keyed for lazy mounting. One
+// render pass owns one key space — buildChatDetailBody clears before
+// rebuilding, so keys never outlive their DOM.
+const pendingImageRegistry = new Map();
+let pendingImageSeq = 0;
+
+function registerPendingImages(images) {
+    const key = `ri-img-${++pendingImageSeq}`;
+    pendingImageRegistry.set(key, images);
+    return key;
+}
+
+function mountImagesFor(detailsEl) {
+    const key = detailsEl.getAttribute('data-ri-imgkey');
+    const container = detailsEl.querySelector('.ri-msg-images');
+    if (!key || !container || container.childElementCount > 0) return;
+    const images = pendingImageRegistry.get(key) ?? [];
+    container.innerHTML = images.map(imageToHtml).join('');
+}
+
+/**
+ * Attach lazy mounting to every message details that carries images. The
+ * `toggle` event does not bubble, so listeners are bound per element right
+ * after the detail HTML lands in the DOM; details that render already open
+ * (search hits) mount immediately.
+ * @param {HTMLElement|Element} rootEl
+ */
+function bindLazyImagePreviews(rootEl) {
+    rootEl?.querySelectorAll?.('details.ri-msg[data-ri-imgkey]').forEach((el) => {
+        el.addEventListener('toggle', () => { if (el.open) mountImagesFor(el); });
+        if (el.open) mountImagesFor(el);
+    });
 }
 
 function renderMessageItem(msg, index, q) {
@@ -359,11 +397,13 @@ function renderMessageItem(msg, index, q) {
     const reasoningBadge = reasoningItems.length
         ? `<span class="ri-msg-reasoning-badge" title="${escapeHtml(t`This message carries reasoning artifacts`)}">${escapeHtml(t`reasoning`)}</span>`
         : '';
+    const images = extractMessageImages(msg?.content);
+    const imgKey = images.length ? registerPendingImages(images) : '';
     const contentPre = content
         ? `<pre class="ri-msg-content">${highlightHtml(content, q)}</pre>`
         : (reasoningHtml ? '' : `<pre class="ri-msg-content">${escapeHtml(t`(empty)`)}</pre>`);
     return `
- <details class="ri-msg${hit ? ' ri-msg-hit' : ''}"${hit ? ' open' : ''}>
+ <details class="ri-msg${hit ? ' ri-msg-hit' : ''}"${hit ? ' open' : ''}${imgKey ? ` data-ri-imgkey="${imgKey}"` : ''}>
  <summary class="ri-msg-summary">
  ${indexHtml}
  <span class="ri-msg-role ri-role-${escapeHtml(role)}">${escapeHtml(role)}</span>
@@ -372,6 +412,7 @@ function renderMessageItem(msg, index, q) {
  </summary>
  ${reasoningHtml ? `<div class="ri-msg-reasoning-wrap">${reasoningHtml}</div>` : ''}
  ${contentPre}
+ ${imgKey ? `\n <div class="ri-msg-images" data-ri-imgkey="${imgKey}"></div>` : ''}
  </details>`;
 }
 
@@ -574,7 +615,7 @@ function buildWireRequestHtml(detail, q) {
     });
 
     const otherJson = otherKeys.length
-        ? JSON.stringify(Object.fromEntries(otherKeys.map(k => [k, wr[k]])), null, 2)
+        ? elideBase64Json(Object.fromEntries(otherKeys.map(k => [k, wr[k]])))
         : '';
 
     const count = (systemText ? 1 : 0) + items.length;
@@ -593,6 +634,9 @@ function buildWireRequestHtml(detail, q) {
 }
 
 function buildChatDetailBody(detail) {
+    // New render pass — drop the previous pass's pending image keys so the
+    // registry never outlives the DOM it was built for.
+    pendingImageRegistry.clear();
     const q = currentDetailSearch;
     let sourceMessagesHtml = '';
     if (Array.isArray(detail.fullMessages)) {
@@ -838,7 +882,10 @@ function buildEmbeddingDetailBody(detail) {
 
     let wireRequestJson = '';
     if (detail.wireRequest != null) {
-        try { wireRequestJson = JSON.stringify(detail.wireRequest, null, 2); } catch { wireRequestJson = String(detail.wireRequest); }
+        // Base64 media payloads are elided so the wire dump stays readable
+        // and the DOM node stays cheap; full bytes remain in the message
+        // image previews and the export endpoint.
+        wireRequestJson = elideBase64Json(detail.wireRequest);
     }
     const wireHit = !!(qLower && wireRequestJson.toLowerCase().includes(qLower));
 
@@ -956,6 +1003,7 @@ async function openInspectorPanel() {
         const detail = await fetchDetail(id);
         cachedDetail = detail;
         content.html(buildDetailHtml(detail));
+        bindLazyImagePreviews(content[0]);
         content.closest('.popup-content').scrollTop(0);
     });
 
@@ -973,6 +1021,7 @@ async function openInspectorPanel() {
         const detailType = cachedDetail.type || 'chat';
         if (detailType === 'chat') {
             content.find('.ri-detail-body').html(buildChatDetailBody(cachedDetail));
+            bindLazyImagePreviews(content.find('.ri-detail-body')[0]);
         } else if (detailType === 'embedding') {
             content.find('.ri-detail-body').html(buildEmbeddingDetailBody(cachedDetail));
         }

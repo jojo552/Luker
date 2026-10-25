@@ -2,7 +2,7 @@ import { describe, expect, test } from '@jest/globals';
 import {
     applyStringPatch,
     SYSTEM_PROMPT_PATCH_SCHEMA_FIELDS,
-} from '../../public/scripts/extensions/orchestrator/system-prompt-patch.js';
+} from '../../public/scripts/iteration-library/system-prompt-patch.js';
 
 describe('applyStringPatch — Claude-Code-Edit-shaped find/replace primitive', () => {
     test('replaces a unique oldString with newString', () => {

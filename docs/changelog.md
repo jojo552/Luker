@@ -15,14 +15,20 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 - Added Tavily, Exa, Serper, SerpApi, and Z.AI as search providers and routed every provider through a unified `/api/search/query` endpoint, restoring the upstream raw-HTML `/api/search/searxng` endpoint.
 - Editing a message no longer discards the search results.
 
+### Server
+
+- Added a byte budget to the request inspector and the captured server log buffers, evicting the oldest records once the budget is exceeded; the inspector budget is tunable via `requestInspector.byteBudgetBytes` in `config.yaml`.
+- Fixed a denial-of-service vulnerability that let unauthenticated clients make the server buffer and parse request bodies up to 500 MB before authentication and access control checks ran; request bodies are now parsed after every access check, and the pre-login account routes cap request bodies at 100 KB.
+
 ### Request Inspector
 
 - Fixed the Inspector showing the stored provider key instead of the key that actually went on the wire when a plugin overrode the auth header through custom include headers.
 - Added a **Tools** section to the request detail that lists the tools sent to the model, each expanding into a parameter table. Tool definitions no longer appear under **Other Params**.
 - Long tool parameter descriptions in the **Tools** section scroll inside a compact block instead of stretching the parameter table.
-- Fixed long tool names hiding the tool description in the **Tools** summary; narrow screens place the description on its own line, and the expanded card shows the full text in a scrollable block.
+- Fixed long tool names hiding the tool description in the **Tools** summary; narrow screens give the description its own line with its own scroll area, and the expanded card shows the complete text in a scrollable block.
 - Parameters without a description show a dash instead of a blank cell.
 - Fixed streamed reasoning details rendering one row per fragment with empty bodies in the request and response views; fragments now merge into complete entries showing their text, summary, and signature, and the duplicated plain reasoning block is dropped.
+- Inlined images in request and response messages render as image previews that load when the message is expanded; the **Wire Request** view elides long base64 payloads.
 
 ### Connections & Models
 
@@ -31,7 +37,9 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 - Aligned chat-completion sampling, reasoning, and tool parameters with each provider's API: unsupported parameters are hidden and no longer sent, and parameters the API accepts but the UI lacked now have controls.
 - Fixed a timed-out request's retry reusing the same generation id, which made the retry read the previous attempt's buffered error as its own result and left the previous attempt running in parallel.
 - Fixed the deprecated proxy preset migration losing the profile proxy password and leaving migrated profiles to authenticate with the active provider key.
+- Added a warning in the API settings when Base URL and a legacy proxy URL are both set, since the proxy URL takes precedence.
 - Fixed OpenRouter streamed reasoning details accumulating as one fragment per delta instead of merging into complete entries.
+- Fixed plain-text function calling stripping unparsed function_calls from the reply text.
 - The connection-profile picker now supports multi-select deletion.
 
 ### Storage & Sync
@@ -74,6 +82,7 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 - Fixed rejected extraction operations being silently dropped.
 - Fixed the extraction retry message contradicting the validator.
 - Added the **Concurrent extraction** mode, which extracts per active node type in parallel.
+- Added a configuration studio that edits the schema, extraction and recall prompts, node-type text, and behavior parameters through reviewable AI proposals; character-scoped parameter writes now store only values that differ from the global settings.
 
 ### Iteration Studio
 
@@ -98,6 +107,11 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 ### Presets
 
 - Preset and template pickers now support multi-select deletion.
+- Improved performance when a preset is bound to a character card.
+
+### Chat
+
+- Added **Swipe gestures** and **Arrow key swipes** switches to User Settings.
 
 ### Fixes
 

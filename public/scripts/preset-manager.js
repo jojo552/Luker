@@ -26,9 +26,9 @@ import { t } from './i18n.js';
 import { instruct_presets } from './instruct-mode.js';
 import { kai_settings } from './kai-settings.js';
 import { convertNovelPreset } from './nai-settings.js';
-import { getActiveCardBoundGhostSnapshot, getChatCompletionPreset, getPresetApplicationPromise, maybeApplyCharacterBoundPreset, oai_settings, openai_setting_names, openai_settings } from './openai.js';
+import { applyPresetBodyChangesToSettings, getActiveCardBoundGhostSnapshot, getChatCompletionPreset, getPresetApplicationPromise, maybeApplyCharacterBoundPreset, oai_settings, openai_setting_names, openai_settings, refreshCharacterBoundPresetRuntimeBody } from './openai.js';
 import { decodeCardBoundOptionValue } from './character/preset-ref-codec.js';
-import { renameCharacterBoundPreset } from './character/presets.js';
+import { getCharacterBoundPreset, renameCharacterBoundPreset, updateCharacterBoundPreset } from './character/presets.js';
 import { getContext } from './st-context.js';
 import { persistPreset } from './preset-persistence.js';
 import { POPUP_RESULT, POPUP_TYPE, Popup } from './popup.js';
@@ -889,7 +889,60 @@ class PresetManager {
     }
 
     /**
+     * Resolve whether a save should land on the active character-card preset
+     * slot.
+     *
+     * The selected ghost body is the live object exposed by
+     * `getPresetList()`, so identity is the reliable signal for "this is the
+     * active card-bound preset". A detached body under the same name is
+     * treated as the global path, which preserves the documented
+     * yield-to-global collision behavior and makes `savePreset(name, copy)`
+     * usable for creating a global preset with that name. Non-selected card
+     * slots also stay on the global path; promoting a slot to the global
+     * library is a legitimate operation, so a name alone cannot imply a card
+     * write.
+     *
+     * @param {string} name
+     * @param {object|undefined} settings
+     * @returns {{character: object, name: string, active: boolean} | null}
+     */
+    resolveCharacterBoundSaveTarget(name, settings) {
+        if (this.apiId !== 'openai') {
+            return null;
+        }
+        const requestedName = String(name || '').trim();
+        if (!requestedName) {
+            return null;
+        }
+
+        const ghost = getActiveCardBoundGhostSnapshot();
+        if (!ghost || !areLookupNamesEqual(ghost.name, requestedName)) {
+            return null;
+        }
+        if (settings != null && settings !== ghost.body) {
+            // Detached body + selected card-bound name: global path. This is
+            // the collision / save-as case.
+            return null;
+        }
+
+        const ctx = getContext();
+        const avatar = decodeCardBoundOptionValue(ghost.ghostValue)?.avatar;
+        const character = avatar ? ctx.characters?.find?.(c => c && c.avatar === avatar) : null;
+        if (!character) {
+            throw new Error(`savePreset: character not found for card-bound preset '${requestedName}'`);
+        }
+        return { character, name: ghost.name, active: true };
+    }
+
+    /**
      * Saves a preset with the given name and settings.
+     *
+     * When the active OpenAI preset is a card-bound ghost and `name` matches
+     * it, the body is written to the character card instead of the global
+     * preset library. Passing the live body from `getPresetList()` (or
+     * omitting `settings`) targets the card; a detached body targets the
+     * global path, which preserves same-name collision semantics.
+     *
      * @param {string} name Name of the preset to save
      * @param {object} [settings] Settings to save as the preset. If not provided, uses the current preset settings.
      * @param {object} [options] Options for saving the preset
@@ -906,6 +959,19 @@ class PresetManager {
         }
 
         const preset = settings ?? this.getPresetSettings(name);
+
+        const characterBoundTarget = this.resolveCharacterBoundSaveTarget(name, settings);
+        if (characterBoundTarget) {
+            const { character, name: cardName, active } = characterBoundTarget;
+            const previousBody = getCharacterBoundPreset(character, cardName)?.preset ?? {};
+            await updateCharacterBoundPreset(character, cardName, preset);
+            refreshCharacterBoundPresetRuntimeBody(cardName, preset);
+            if (active) {
+                applyPresetBodyChangesToSettings(previousBody, preset);
+                await saveSettings();
+            }
+            return;
+        }
 
         const saveResult = await persistPreset({
             apiId: this.apiId,
@@ -1028,7 +1094,7 @@ class PresetManager {
      * Gets a list of presets for the API.
      *
      * For `openai` with an active card-bound ghost `<option>`, a
-     * synthesized read-only row is appended so upstream third-party
+     * synthesized working row is appended so upstream third-party
      * consumers that read `presets[preset_names[name]]` or
      * `presets[Number(getSelectedPreset())]` (JS-Slash-Runner /
      * TavernHelper `usePresetSettingsStore`, `usePresetScriptsStore`,
@@ -1037,24 +1103,31 @@ class PresetManager {
      * silently drop their per-preset state whenever a card-bound
      * preset is active.
      *
+     * The synthesized row's `body` is the live runtime body, not a
+     * copy. Upstream consumers may mutate `presets[i]` in place; the
+     * mutation stays in memory and `savePreset(name, body)` persists it
+     * to the character card. Returning a copy here would make those
+     * writes disappear without an error.
+     *
      * Semantics:
      *   - Only applies to `openai` — no other API has ghost options.
      *   - Same-name collision (a global preset already carries this
      *     name) yields to the global entry so writes going through
      *     the global `updateList` / `savePreset` path still target
-     *     the same array slot. Card-bound writes have their own
-     *     path (`writePresetExtensionField` → card sync at
-     *     `syncCharacterBoundOpenAIPresetExtensionField`) so this
+     *     the same array slot. Card-bound writes go through
+     *     `savePreset` (live-body identity) or
+     *     `writePresetExtensionField` → card sync at
+     *     `syncCharacterBoundOpenAIPresetExtensionField`, so this
      *     bias is safe. Third-party consumers that read the
      *     collided global body will see the source they bound
      *     from — acceptable because card-body edits stay in sync
      *     with the global via existing iter-studio propagation.
      *   - Returned `presets` array and `preset_names` object are
-     *     fresh shallow copies (only when synthesis occurs) so the
-     *     upstream `openai_settings` / `openai_setting_names`
-     *     module state is never mutated by this read path. Internal
-     *     writers must use `getPresetListRaw()` instead — mutating
-     *     the synth copies would silently drop the writes.
+     *     fresh shallow copies (only when synthesis occurs) so adding
+     *     or replacing entries cannot mutate the upstream
+     *     `openai_settings` / `openai_setting_names` arrays. The ghost
+     *     body itself is shared by design. Internal readers that only
+     *     need `settings` must use `getPresetListRaw()` instead.
      * @param {string} [api] API ID. If not specified, uses the current API ID.
      * @returns {{presets: any[], preset_names: object, settings: object}}
      */
@@ -1098,10 +1171,12 @@ class PresetManager {
      */
     updateList(name, preset, { select = true } = {}) {
         // MUST go against the raw arrays — `getPresetList()` returns
-        // fresh shallow copies when a card-bound ghost is active, so
-        // mutating those copies would silently drop the write and leave
+        // fresh shallow copies of the arrays and name map when a
+        // card-bound ghost is active, so pushing/replacing entries
+        // through those copies would silently drop the write and leave
         // the underlying `openai_settings` / `openai_setting_names`
-        // out of date. See `getPresetList()` JSDoc.
+        // out of date. The ghost body itself is live; only the
+        // collection containers are copies. See `getPresetList()` JSDoc.
         const { presets, preset_names } = this.getPresetListRaw();
         const presetExists = this.isKeyedApi() ? preset_names.includes(name) : Object.keys(preset_names).includes(name);
 
@@ -1554,7 +1629,7 @@ class PresetManager {
      * @return {any} The value of the preset extension field, or null if not found.
      */
     readPresetExtensionField({ name, path }) {
-        const { settings } = this.getPresetList();
+        const { settings } = this.getPresetListRaw();
         const selectedName = this.getSelectedPresetName();
         const presetName = this.resolvePresetName(name || selectedName);
 
@@ -1584,7 +1659,7 @@ class PresetManager {
      * @return {Promise<void>} Resolves when the preset is saved.
      */
     async writePresetExtensionField({ name, path, value }) {
-        const { settings } = this.getPresetList();
+        const { settings } = this.getPresetListRaw();
         const selectedName = this.getSelectedPresetName();
         const presetName = this.resolvePresetName(name || selectedName);
         const selectedOption = $(this.select).find('option:selected');

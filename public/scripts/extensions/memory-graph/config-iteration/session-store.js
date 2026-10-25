@@ -2,12 +2,14 @@
 // Copyright (C) 2026 FunnyCups
 
 /**
- * Memory Graph Schema — plugin-owned session store, scope-aware.
+ * Memory Graph configuration studio — plugin-owned session store,
+ * scope-aware.
  *
  * Restores the per-character vs global session dimension MG had at the
  * schema layer all along (the `getSchemaScopeInfo` view) but that V2
- * collapsed into a single global bucket. Now session storage routes the
- * same way the schema itself does:
+ * collapsed into a single global bucket. Sessions store the
+ * configuration workbench's chat history and staged proposals, and
+ * storage routes the same way the configuration itself does:
  *   - character scope → sidecar under MG_SIDECAR_NAMESPACE on the avatar
  *   - global scope    → extension_settings.memory_graph.schema_iter_global_sessions
  */
@@ -55,7 +57,7 @@ async function readSidecar(ctx, avatar) {
     const result = await ctx.getCharacterState(avatar, MG_SIDECAR_NAMESPACE);
     if (!result.ok) {
         // eslint-disable-next-line no-console
-        console.warn(`[memory-graph schema-iteration] sidecar read failed for ${avatar} (reason=${result.reason}, hint=${result.hint})`);
+        console.warn(`[memory-graph config-iteration] sidecar read failed for ${avatar} (reason=${result.reason}, hint=${result.hint})`);
         return { version: SIDECAR_SCHEMA_VERSION, sessions: {} };
     }
     const raw = result.state;
@@ -145,7 +147,7 @@ export function createMgSchemaSessionStore({ getMgSettingsRoot, persistSettings,
             );
             if (!writeResult.ok) {
                 // eslint-disable-next-line no-console
-                console.warn(`[memory-graph schema-iteration] migration save failed (reason=${writeResult.reason}, hint=${writeResult.hint})`);
+                console.warn(`[memory-graph config-iteration] migration save failed (reason=${writeResult.reason}, hint=${writeResult.hint})`);
             }
             return migrated;
         }
@@ -185,7 +187,7 @@ export function createMgSchemaSessionStore({ getMgSettingsRoot, persistSettings,
                 }),
             );
             if (!result.ok) {
-                throw new Error(`[memory-graph schema-iteration] save failed (${result.reason}): ${result.hint}`);
+                throw new Error(`[memory-graph config-iteration] save failed (${result.reason}): ${result.hint}`);
             }
             return;
         }
@@ -204,7 +206,7 @@ export function createMgSchemaSessionStore({ getMgSettingsRoot, persistSettings,
                 }),
             );
             if (!result.ok) {
-                throw new Error(`[memory-graph schema-iteration] delete failed (${result.reason}): ${result.hint}`);
+                throw new Error(`[memory-graph config-iteration] delete failed (${result.reason}): ${result.hint}`);
             }
             return;
         }

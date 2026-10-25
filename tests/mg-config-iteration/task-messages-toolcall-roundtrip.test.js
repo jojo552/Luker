@@ -187,7 +187,7 @@ describe('MG schema buildPayloadForOutcome — bus outcome → tool_result paylo
  * asserts" block below will diff.
  *
  * Contract (mirrored verbatim from
- * public/scripts/extensions/memory-graph/schema-iteration/studio.js
+ * public/scripts/extensions/memory-graph/config-iteration/studio.js
  * `applyOutcomesToToolResults`):
  *   - Match by sourceCallId → toolResults[i].tool_call_id, update
  *     in place with buildPayloadForOutcome(outcome).

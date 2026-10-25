@@ -89,6 +89,7 @@ jest.unstable_mockModule(
         persistCharacterSchemaOverride: async () => {},
         removeCharacterSchemaOverride: async () => {},
         persistCharacterAdvancedOverride: async () => {},
+        persistCharacterAdvancedOverridePatch: async () => {},
         removeCharacterAdvancedOverride: async () => {},
     }),
 );

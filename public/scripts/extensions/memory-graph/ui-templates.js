@@ -210,20 +210,20 @@ function buildAdvancedTabHtml(deps) {
     return `
         <fieldset class="luker_rpg_memory_advanced_fieldset">
             <legend>${escapeHtml(i18n('Schema'))}</legend>
-            <small style="opacity:0.8">${escapeHtml(i18n('Configure memory table types, extraction hints, and compression strategy in a popup editor.'))}</small>
+            <small style="opacity:0.8">${escapeHtml(i18n('Configure memory table types, prompts, and behavior parameters in a popup editor.'))}</small>
             <small id="luker_rpg_memory_schema_scope" style="opacity:0.85"></small>
             <small id="luker_rpg_memory_schema_summary" style="opacity:0.85"></small>
             <div class="flex-container">
                 <div id="luker_rpg_memory_open_schema_editor" class="menu_button">${escapeHtml(i18n('Open Schema Editor'))}</div>
-                <div id="luker_rpg_memory_open_schema_studio" class="menu_button">${escapeHtml(i18n('AI Iterate Schema'))}</div>
+                <div id="luker_rpg_memory_open_schema_studio" class="menu_button">${escapeHtml(i18n('AI Configure Memory Graph'))}</div>
                 <div id="luker_rpg_memory_open_graph_studio" class="menu_button">${escapeHtml(i18n('AI Edit Graph'))}</div>
             </div>
             <label for="luker_rpg_memory_request_api_preset">${escapeHtml(i18n('Iteration AI API preset (Connection profile)'))}${fh('About Iteration AI API preset', 'Iteration AI API preset help body')}</label>
             <select id="luker_rpg_memory_request_api_preset" class="text_pole"></select>
             <label for="luker_rpg_memory_request_llm_preset">${escapeHtml(i18n('Iteration AI prompt preset (params + prompt)'))}${renderPresetHelpButton({ kind: 'iteration', targetSelectId: 'luker_rpg_memory_request_llm_preset' })}</label>
             <select id="luker_rpg_memory_request_llm_preset" class="text_pole"></select>
-            <label>${escapeHtml(i18n('Schema Iteration Prompt (schema-editor AI)'))}${fh('About Schema Iteration Prompt', 'Schema Iteration Prompt help body')}
-                <textarea id="luker_rpg_memory_advanced_schema_iter_system_prompt" class="text_pole textarea_compact" rows="8"></textarea>
+            <label>${escapeHtml(i18n('Configuration Iteration Prompt (configuration-editor AI)'))}${fh('About Configuration Iteration Prompt', 'Configuration Iteration Prompt help body')}
+                <textarea id="luker_rpg_memory_advanced_config_iter_system_prompt" class="text_pole textarea_compact" rows="8"></textarea>
             </label>
             <label>${escapeHtml(i18n('Graph Revision Prompt (graph-editor AI)'))}${fh('About Graph Revision Prompt', 'Graph Revision Prompt help body')}
                 <textarea id="luker_rpg_memory_advanced_graph_iter_system_prompt" class="text_pole textarea_compact" rows="8"></textarea>

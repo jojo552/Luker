@@ -51,7 +51,7 @@ start -> orch.scouts -> orch.brain -> orch.draft -> orch.curate -> end
 
 ## Step 2 — 配置預設助手，派生 Director 要用的預設
 
-Luker 的外掛呼叫 LLM 大致分為**不同類別**，需要的預設形態完全不同：一類是**外掛產出 RP 內容**的（比如 Director 的 Agent 團隊起草正文、評審子 Agent 複審等），需要帶越獄 / 文風 / 反八股的完整 RP 預設；另一類是**外掛的迭代 AI**（預設助手、記憶圖 Schema 工作台、CardApp Studio、Director 的迭代工作台等），它們透過工具呼叫修改配置或抽取結構化資料，不寫故事——任何混入的 RP 指令均會干擾模型執行外掛指令，所以這些位置需要一份**只保留越獄**的精簡預設。
+Luker 的外掛呼叫 LLM 大致分為**不同類別**，需要的預設形態完全不同：一類是**外掛產出 RP 內容**的（比如 Director 的 Agent 團隊起草正文、評審子 Agent 複審等），需要帶越獄 / 文風 / 反八股的完整 RP 預設；另一類是**外掛的迭代 AI**（預設助手、記憶圖配置工作台、CardApp Studio、Director 的迭代工作台等），它們透過工具呼叫修改配置或抽取結構化資料，不寫故事——任何混入的 RP 指令均會干擾模型執行外掛指令，所以這些位置需要一份**只保留越獄**的精簡預設。
 
 Director 這條流程同時涉及這些類別：
 
@@ -85,7 +85,7 @@ RP 預設預設假設「主 LLM 獨立完成整個回覆」，將其放入 Agent
 
 ![? 按鈕彈窗：解釋該位置需要掛什麼預設，底部可匯入 plugin-only](/images/recipes/agent-onboarding/step-02a-help-popup.png)
 
-Luker 內建的其他迭代 AI 入口（Director 的迭代工作台、記憶圖 Schema 工作台、CardApp Studio 等）旁邊均有同一個 **?** 按鈕——匯入操作完全一致。
+Luker 內建的其他迭代 AI 入口（Director 的迭代工作台、記憶圖配置工作台、CardApp Studio 等）旁邊均有同一個 **?** 按鈕——匯入操作完全一致。
 
 ### 2b —— 用預設助手派生 **Agent 路徑** 的預設
 
@@ -181,9 +181,9 @@ Luker 內建的其他迭代 AI 入口（Director 的迭代工作台、記憶圖 
 
 ## Step 7（可選）— 讓 AI 迭代 Schema
 
-記憶圖的 Schema 也能被 AI 迭代。打開**記憶**面板裡的 **AI 迭代 Schema**，跳轉到 **記憶圖 Schema 工作台**。
+記憶圖的 Schema 也能被 AI 迭代。打開**記憶**面板裡的 **AI 設定記憶圖**，跳轉到 **記憶圖配置工作台**。
 
-![記憶圖 Schema 工作台](/images/recipes/agent-onboarding/step-07-schema-studio.png)
+![記憶圖配置工作台](/images/recipes/agent-onboarding/step-07-schema-studio.png)
 
 與編排配置一樣，Schema 也區分全域與角色卡作用域——卡上儲存的 Schema 會隨卡匯出。可以在工作台裡針對題材進行客製，例如：
 
@@ -192,7 +192,7 @@ Luker 內建的其他迭代 AI 入口（Director 的迭代工作台、記憶圖 
 - 生存題材：新增「物品」節點，追蹤道具的耐久、狀態
 
 ::: tip 不要忘記為記憶圖配置迭代 AI 預設
-記憶圖面板裡的 **Schema 迭代提示詞（Schema 編輯 AI）** 一欄屬於 Step 2a 提到的「迭代 AI 路徑」——其預設選擇器旁邊也有 **?** 按鈕，點擊後選擇**匯入 plugin-only 預設**即可（如果已在 Step 2a 匯入過，直接在下拉中選擇即可）。
+記憶圖面板裡的 **配置迭代提示詞（配置編輯 AI）** 一欄屬於 Step 2a 提到的「迭代 AI 路徑」——其預設選擇器旁邊也有 **?** 按鈕，點擊後選擇**匯入 plugin-only 預設**即可（如果已在 Step 2a 匯入過，直接在下拉中選擇即可）。
 :::
 
 ## 實際執行

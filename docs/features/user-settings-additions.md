@@ -49,9 +49,8 @@ Two settings matter when you use Luker on a phone.
 
 ## Chat rendering and leaving the page
 
-Two smaller additions under **Chat/Message Handling**:
-
 - **Lazy-load Message Media** — enabled by default. Chat images and videos load only as they approach the viewport, which keeps the rendering cost of long chats with extensive media low. Extensions that need a specific element loaded immediately can opt out per element.
+- **Arrow key swipes** — enabled by default, shown on desktop only. When turned off, the left and right arrow keys no longer swipe the last reply.
 - **Leave-page confirmation** — warns before you close or reload the page. **Only when risky** (the default) warns when a generation is running, a message edit is open, or you have unsent text in the input box; **Never** and **Always** override that judgement.
 
 ## Diagnostics switches

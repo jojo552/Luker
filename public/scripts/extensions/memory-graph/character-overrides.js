@@ -102,10 +102,16 @@ export function getCharacterSchemaOverrideByAvatar(context, avatar) {
 export function getCharacterAdvancedOverrideByAvatar(context, avatar) {
     const extensionData = getCharacterExtensionDataByAvatar(context, avatar);
     const override = extensionData?.[CHARACTER_ADVANCED_OVERRIDE_KEY];
-    if (!override || typeof override !== 'object') {
+    if (!override || typeof override !== 'object' || Array.isArray(override)) {
         return null;
     }
-    return deps.normalizeAdvancedSettings(override, deps.defaultSettings);
+    if (Object.keys(override).length === 0) {
+        return null;
+    }
+    // Return the raw sparse payload. The caller merges it over the normalized
+    // globals, so filling every registered key here would mask global edits
+    // with stale per-card copies.
+    return { ...override };
 }
 
 export function getEffectiveAdvancedSettings(context = null, settings = null) {
@@ -174,9 +180,7 @@ export function getAdvancedScopeInfo(context = null, settings = null) {
     const characterName = hasAvatar ? getCharacterDisplayNameByAvatar(ctx, avatar) : '';
     const overrideSettings = hasAvatar ? getCharacterAdvancedOverrideByAvatar(ctx, avatar) : null;
     const hasOverride = Boolean(overrideSettings);
-    const effectiveSettings = hasOverride
-        ? deps.normalizeAdvancedSettings(overrideSettings, currentSettings)
-        : deps.normalizeAdvancedSettings(currentSettings, deps.defaultSettings);
+    const effectiveSettings = getEffectiveAdvancedSettings(ctx, currentSettings);
     return {
         avatar,
         hasAvatar,
@@ -227,6 +231,49 @@ export async function removeCharacterSchemaOverride(context, avatar) {
     return true;
 }
 
+/**
+ * Apply a sparse patch to the card's advanced-settings override.
+ *
+ * Reads the raw sparse object, shallow-copies it, writes `patch.set`, deletes
+ * `patch.unset` keys, and writes the result back. The payload is not
+ * normalized: only the keys the caller touched differ from the globals. When
+ * no keys remain, the `UNSET_VALUE` sentinel clears the blob slot. Sibling
+ * keys such as `schemaOverride` pass through untouched. A failed write
+ * propagates to the caller.
+ */
+export async function persistCharacterAdvancedOverridePatch(context, avatar, patch = {}) {
+    const target = String(avatar || '').trim();
+    if (!target || typeof context?.writeExtensionField !== 'function') {
+        return false;
+    }
+    const characterIndex = getCharacterIndexByAvatar(context, target);
+    if (characterIndex < 0) {
+        return false;
+    }
+    const previous = getCharacterExtensionDataByAvatar(context, target);
+    const nextOverride = { ...(getCharacterAdvancedOverrideByAvatar(context, target) || {}) };
+    const setValues = patch?.set && typeof patch.set === 'object' ? patch.set : {};
+    Object.assign(nextOverride, setValues);
+    const unsetKeys = Array.isArray(patch?.unset) ? patch.unset : [];
+    for (const key of unsetKeys) {
+        delete nextOverride[String(key)];
+    }
+    const next = {
+        ...previous,
+        [CHARACTER_ADVANCED_OVERRIDE_KEY]: Object.keys(nextOverride).length > 0
+            ? nextOverride
+            : UNSET_VALUE,
+    };
+    await context.writeExtensionField(characterIndex, deps.MODULE_NAME, next);
+    return true;
+}
+
+/**
+ * Legacy full-snapshot write path: normalizes `advancedSettings` into all
+ * registered keys and replaces the card's `advancedOverride` with it. New
+ * writes go through {@link persistCharacterAdvancedOverridePatch} so the card
+ * only stores the keys that differ from the globals.
+ */
 export async function persistCharacterAdvancedOverride(context, avatar, advancedSettings) {
     const target = String(avatar || '').trim();
     if (!target || typeof context?.writeExtensionField !== 'function') {

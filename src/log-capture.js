@@ -1,15 +1,23 @@
 import util from 'node:util';
+import { ByteBudgetLedger } from './util/byte-budget.js';
 
 const WRAPPED_ORIGINAL = Symbol('luker.log.capture.original');
 const LOG_LEVELS = ['log', 'info', 'warn', 'error', 'debug'];
 // Aligned with users-admin.js /logs/get per-request clamp and public/scripts/user.js MAX_LOG_VIEW_LIMIT; in-memory ring buffer.
 const DEFAULT_CAPACITY = 5000;
+// Byte budget for the captured-log ring. Entry count alone cannot bound
+// memory: DEBUG-level provider logs carry full request/response bodies
+// (measured ~0.5 MB per entry with real payloads), so 5000 entries can retain
+// ~2.4 GB — over half of Node's ~4 GB default old-space limit. 256 MB keeps a
+// long debug session intact while capping retention at ~6% of that heap.
+const DEFAULT_BYTE_BUDGET_BYTES = 256 * 1024 * 1024;
 
 /** @type {{ id: number; timestamp: number; level: string; message: string }[]} */
 const entries = [];
 
 let nextId = 1;
 const capacity = DEFAULT_CAPACITY;
+const ledger = new ByteBudgetLedger(DEFAULT_BYTE_BUDGET_BYTES);
 
 function stripAnsiArtifacts(input) {
     return String(input)
@@ -36,15 +44,28 @@ function toSafeString(value) {
 
 function appendEntry(level, args) {
     const message = args.map(toSafeString).join(' ');
-    entries.push({
+    const entry = {
         id: nextId++,
         timestamp: Date.now(),
         level,
         message,
-    });
+    };
+    entries.push(entry);
+    ledger.track(entry);
 
     if (entries.length > capacity) {
+        for (let i = 0; i < entries.length - capacity; i++) {
+            ledger.untrack(entries[i]);
+        }
         entries.splice(0, entries.length - capacity);
+    }
+
+    // Byte budget: evict oldest first. The newest entry always survives — a
+    // single oversized log line must still be captured, never silently
+    // dropped by its own bookkeeping.
+    while (ledger.isOver() && entries.length > 1) {
+        ledger.untrack(entries[0]);
+        entries.shift();
     }
 }
 
@@ -85,6 +106,7 @@ export function installLogCapture() {
  */
 export function clearCapturedLogs() {
     entries.length = 0;
+    ledger.reset();
 }
 
 function normalizeOptionalTimestamp(value) {

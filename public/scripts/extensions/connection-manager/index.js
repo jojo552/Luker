@@ -15,7 +15,7 @@ import { SlashCommandScope } from '../../slash-commands/SlashCommandScope.js';
 import { collapseSpaces, getUniqueName, isFalseBoolean, isTrueBoolean, uuidv4, waitUntilCondition } from '../../utils.js';
 import { t } from '../../i18n.js';
 import { getSecretLabelById, SECRET_KEYS, writeSecret } from '../../secrets.js';
-import { applyProxyProfileEntry, chat_completion_sources, getCurrentProxyProfileEntry, oai_settings, proxies, whenChatCompletionModelListReady } from '../../openai.js';
+import { applyProxyProfileEntry, chat_completion_sources, getCurrentProxyProfileEntry, oai_settings, proxies, updateReverseProxyConflictWarning, whenChatCompletionModelListReady } from '../../openai.js';
 import { initActionableSingleSelect } from '../../select2-actionable-single.js';
 import { buildBulkDeleteConfirmBody } from '../../select2-multiselect.js';
 import { showUndoToast } from '../../undo-toast.js';
@@ -839,6 +839,7 @@ async function applyConnectionProfile(profile) {
             oai_settings.base_url = value;
             $('#openai_base_url').val(value);
             $('.reverse_proxy_warning').toggle(oai_settings.reverse_proxy !== '' || oai_settings.base_url !== '');
+            updateReverseProxyConflictWarning();
             continue;
         }
 

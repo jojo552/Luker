@@ -51,7 +51,7 @@ Any RP preset you normally use is suitable. This step only confirms that you hav
 
 ## Step 2 — Configure the Preset Assistant and derive the presets Director needs
 
-LLM calls made by Luker's plugins fall into **distinct categories** with very different preset needs. One is **plugins producing RP content** — Director's agent team drafting the body, critic sub-agents reviewing, and so on — which requires a full RP preset with jailbreak / style / anti-cliché guidance. The other is the **iteration AI** that powers various plugins — the Preset Assistant, the Memory Graph schema studio, CardApp Studio, Director's Iteration Studio, and so on — which uses tool calls to edit configs or extract structured data; any RP instructions leaking in will interfere with the model executing the plugin's instructions, so these slots require a **stripped-down preset that retains only jailbreak**.
+LLM calls made by Luker's plugins fall into **distinct categories** with very different preset needs. One is **plugins producing RP content** — Director's agent team drafting the body, critic sub-agents reviewing, and so on — which requires a full RP preset with jailbreak / style / anti-cliché guidance. The other is the **iteration AI** that powers various plugins — the Preset Assistant, the Memory Graph configuration studio, CardApp Studio, Director's Iteration Studio, and so on — which uses tool calls to edit configs or extract structured data; any RP instructions leaking in will interfere with the model executing the plugin's instructions, so these slots require a **stripped-down preset that retains only jailbreak**.
 
 Director's flow touches these categories at once:
 
@@ -181,9 +181,9 @@ The studio presents the diff entry by entry — review, approve, and save. If th
 
 ## Step 7 (optional) — Let AI iterate your schema
 
-The memory graph schema can also be iterated by AI. In the **Memory** panel, click **AI Iterate Schema** to open the **Memory Graph Schema Studio**.
+The memory graph schema can also be iterated by AI. In the **Memory** panel, click **AI Configure Memory Graph** to open the **Memory Graph Configuration Studio**.
 
-![Memory Graph Schema Studio](/images/recipes/agent-onboarding/step-07-schema-studio.png)
+![Memory Graph Configuration Studio](/images/recipes/agent-onboarding/step-07-schema-studio.png)
 
 Like orchestration configurations, schemas have both global and per-card scope — per-card schemas travel with the card on export. Use the studio to tailor the schema for a genre, for example:
 
@@ -192,7 +192,7 @@ Like orchestration configurations, schemas have both global and per-card scope �
 - Survival: add `inventory_item` nodes, tracking each item's durability and state
 
 ::: tip Do not forget the memory graph's iteration AI preset
-The **Schema Iteration Prompt (schema-editor AI)** field in the Memory panel belongs to the same "iteration AI path" mentioned in Step 2a — its preset selector also has a **?** button; if you already imported plugin-only in Step 2a, select it from the dropdown here.
+The **Configuration Iteration Prompt (configuration-editor AI)** field in the Memory panel belongs to the same "iteration AI path" mentioned in Step 2a — its preset selector also has a **?** button; if you already imported plugin-only in Step 2a, select it from the dropdown here.
 :::
 
 ## See it in action

@@ -205,7 +205,7 @@ test.describe('iter-studio settings.json → sidecar migration', () => {
         const result = await page.evaluate(async () => {
             const ctx = window.SillyTavern.getContext();
             const settingsRoot = ctx.extensionSettings.memory_graph;
-            const mod = await import('/scripts/extensions/memory-graph/schema-iteration/session-migration-v2-to-sidecar.js');
+            const mod = await import('/scripts/extensions/memory-graph/config-iteration/session-migration-v2-to-sidecar.js');
             await mod.migrateMgSchemaSessionsV2ToSidecar({
                 settingsRoot,
                 ctx,

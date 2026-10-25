@@ -59,6 +59,23 @@ function extractToken(request) {
 }
 
 /**
+ * Reject unauthenticated callers before a route body parser runs.
+ *
+ * This router is mounted ahead of the login gate so the peer protocol can
+ * carry its own sync token. The user-facing routes inside it authenticate
+ * from the logged-in session, so their parsers must sit behind this guard:
+ * otherwise their body size limits would double as the only defence on the
+ * pre-login surface. Same 401 body the handlers return.
+ */
+function requireSyncUser(request, response, next) {
+    const user = request.user;
+    if (!user?.profile?.handle || !user?.directories?.root) {
+        return response.status(401).json({ error: 'Auth required' });
+    }
+    return next();
+}
+
+/**
  * Best-effort short label for a failed outbound fetch. `fetch` wraps the
  * real socket error in `error.cause`; for a hostname resolving to several
  * addresses it is an AggregateError whose `.errors` carry the per-address
@@ -635,7 +652,7 @@ router.post('/session/close', requireSyncToken, (request, response) => {
  *     mid-sync — caller can retry once the network is back)
  *   - anything else → 500 with the message echoed for diagnostics
  */
-router.post('/pull', express.json({ limit: '1mb' }), async (request, response) => {
+router.post('/pull', requireSyncUser, express.json({ limit: '1mb' }), async (request, response) => {
     const user = request.user;
     if (!user?.profile?.handle || !user?.directories?.root) {
         return response.status(401).json({ error: 'Auth required' });
@@ -696,7 +713,7 @@ router.post('/pull', express.json({ limit: '1mb' }), async (request, response) =
  * correct surface so the UI can render "no prior sync to undo" rather
  * than a generic server error.
  */
-router.post('/undo', express.json({ limit: '16kb' }), async (request, response) => {
+router.post('/undo', requireSyncUser, express.json({ limit: '16kb' }), async (request, response) => {
     const user = request.user;
     if (!user?.profile?.handle || !user?.directories?.root) {
         return response.status(401).json({ error: 'Auth required' });
@@ -979,7 +996,7 @@ router.delete('/peers/:peerId/auth', async (request, response) => {
  * `pairedAt` is preserved by `recordPeer` so re-labeling doesn't make a
  * long-paired peer look new.
  */
-router.post('/peers/:peerId/label', express.json({ limit: '4kb' }), async (request, response) => {
+router.post('/peers/:peerId/label', requireSyncUser, express.json({ limit: '4kb' }), async (request, response) => {
     const user = request.user;
     if (!user?.profile?.handle || !user?.directories?.root) {
         return response.status(401).json({ error: 'Auth required' });
@@ -1022,7 +1039,7 @@ router.post('/peers/:peerId/label', express.json({ limit: '4kb' }), async (reque
  * Returning the categories the user selected lets the OTHER device pre-fill
  * its accept form with the same selection — pairing implies shared scope.
  */
-router.post('/pair/start', express.json({ limit: '4kb' }), async (request, response) => {
+router.post('/pair/start', requireSyncUser, express.json({ limit: '4kb' }), async (request, response) => {
     const user = request.user;
     if (!user?.profile?.handle || !user?.directories?.root) {
         return response.status(401).json({ error: 'Auth required' });
@@ -1076,7 +1093,9 @@ router.post('/pair/start', express.json({ limit: '4kb' }), async (request, respo
  * coded body so the UI can fall back to prompting the user once for the
  * URL.
  */
-router.post('/peers/:peerId/sync', express.json({ limit: '4kb' }), async (request, response) => {
+// `resolutions` carries one entry per conflicting file, so this body
+// grows with the conflict set. Same payload shape and limit as /pull.
+router.post('/peers/:peerId/sync', requireSyncUser, express.json({ limit: '1mb' }), async (request, response) => {
     const user = request.user;
     if (!user?.profile?.handle || !user?.directories?.root) {
         return response.status(401).json({ error: 'Auth required' });
@@ -1223,7 +1242,9 @@ router.post('/peers/:peerId/sync', express.json({ limit: '4kb' }), async (reques
  * disambiguate "your credentials were wrong" from "the other device isn't
  * reachable".
  */
-router.post('/pair/accept', express.json({ limit: '4kb' }), async (request, response) => {
+// Accepts the same conflict-resolution map as /pull on the second accept,
+// so it shares that route's body limit.
+router.post('/pair/accept', requireSyncUser, express.json({ limit: '1mb' }), async (request, response) => {
     const user = request.user;
     if (!user?.profile?.handle || !user?.directories?.root) {
         return response.status(401).json({ error: 'Auth required' });

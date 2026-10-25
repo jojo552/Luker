@@ -18,7 +18,7 @@
 
 // Event summary writing standard (event.summary 字段专用规范).
 // Interpolated by the event type's extraction rules.
-export const EVENT_SUMMARY_RULES_BODY = `# Event summary writing standard (event.summary 字段专用规范)
+const EVENT_SUMMARY_RULES_BODY = `# Event summary writing standard (event.summary 字段专用规范)
 
 适用范围: 本规范**只**约束 event.summary 字段的最终字符串。其他字段 (character_sheet 的 traits/identity/aliases、location_state 的 state/controller、thread 的 note 等) 不在此规范范围内。
 
@@ -936,3 +936,86 @@ Start from the compact candidate index. Explore only nodes relevant to the new d
 The candidate index and every tool result are bounded; omitted nodes may still exist. Never treat omission as proof of non-existence, and never create a duplicate of a node you have not checked for.
 
 You cannot write memory during exploration. When enough context is collected, call luker_rpg_extract_crawl_done. Keep exploration selective — when no historical detail is required for the batch, finish immediately instead of reading.`;
+
+// LLM recall stage prompts plus the vector query-rewrite prompt. Imported
+// by main.js for the default settings slots and the runtime use-time fallback.
+export const DEFAULT_RECALL_ROUTE_SYSTEM_PROMPT = [
+    'You are a memory recall planner focused on relevance, continuity, and efficiency.',
+    'You must output exactly one short <thought>...</thought> before tool call to explain your plan.',
+    'Input format: XML blocks (recall_query_context, candidate_nodes, always_inject_node_ids, schema_overview, selection_constraints). Read all blocks before deciding.',
+    'First, extract a compact query profile from recall_query_context: active entities, locations, goals, unresolved commitments, relationship/emotion shifts, and causal constraints.',
+    'Do not rely on keywords only. Use semantic cues, intent, and causal context from recent dialogue.',
+    'Primary goal: pick the smallest high-value set that best supports the CURRENT scene and next reply.',
+    'Apply layered relevance explicitly: (1) direct relevance to this turn, (2) indirect continuity support, (3) background context with clear potential impact.',
+    'Rank candidates by practical usefulness now: direct event support, causality continuity, unresolved commitments/constraints, and key character/location/rule grounding.',
+    'Use edge_summary to follow relation chains and avoid isolated picks.',
+    '',
+    '## Hierarchy awareness (event nodes form a multi-layer tree)',
+    'Each candidate carries three structural fields:',
+    '  - semantic_depth: 0 = leaf (one source-batch event); 1+ = rollup that compresses N children into one milestone.',
+    '  - parent_id: id of the rollup that contains this node, if any.',
+    '  - child_count: number of immediate children this node summarises (0 for leaves).',
+    'Mental model: deeper into the tree = more abstract over a longer span; closer to the leaves = richer scene-specific detail (paraphrased lines, specific actions, specific reactions, posture / scene / sensory cues). The same storyline exists at multiple zoom levels.',
+    'You do NOT have to drill — finalize is fine when the current candidate set already covers the need. The hierarchy is a tool, not an obligation.',
+    '',
+    '## When to drill (use sparingly)',
+    'Drill when a rollup looks topically on-target but, by design, has compressed away the specifics this turn needs — e.g. what exactly was promised, who reacted how, what one specific ally did, what items changed hands, what the scene felt like.',
+    'Do NOT drill when:',
+    '  - The rollup\'s abstract gist is enough (continuation, background context).',
+    '  - No rollup is topically relevant — drilling will not create relevance.',
+    '  - The needed detail is already present in another candidate at lower depth.',
+    'How drill works: set action="drill" and put 1-2 high-value rollups in expand_plan as seed_node_id with include_children:true (the system will pull their immediate children into the next-pass candidate set). Keep depth small (1 unless grand-children are clearly needed). Wide drilling wastes budget.',
+    '',
+    'Return action="finalize" if current candidates are sufficient.',
+    'Return action="drill" only when extra expansion is clearly needed for missing context.',
+    'When drilling, expand around high-value seeds instead of broad expansion.',
+    'Always-inject nodes are already injected separately. Never include them in selected_node_ids.',
+    'Do not fabricate missing facts. If grounded evidence is weak or absent, prefer conservative selection or empty selection and explain briefly in reason.',
+    'Be honest: if no grounded memory should be recalled, return finalize with empty selected_node_ids.',
+    'FINAL OUTPUT CONTRACT (ABSOLUTE): return EXACTLY two parts in order: (1) one <thought>...</thought>; (2) function call output only.',
+    'Do not output any narrative/body text, markdown, code fences, XML blocks (except <thought>), comments, or any extra JSON payload.',
+    'After function call output, stop immediately.',
+].join('\n');
+
+export const DEFAULT_RECALL_FINALIZE_SYSTEM_PROMPT = [
+    'You are finalizing memory recall node selection after optional drill expansion.',
+    'You must output exactly one short <thought>...</thought> before tool call to explain your final tradeoff.',
+    'Input format: XML blocks (recall_query_context, candidate_nodes, always_inject_node_ids, route_result, selection_constraints). Read all blocks before deciding.',
+    'Before selecting, extract the key information needs of this turn from context: who/where/what is active, what must stay continuous, and what unknowns matter now.',
+    'Do not rely on keywords only. Use semantic intent and causal continuity.',
+    'Select nodes that maximize practical value for the immediate next reply.',
+    'Keep storyline continuity first, then add essential support nodes (character/location/rule) only when they materially improve correctness.',
+    'Apply layered relevance in final ranking: direct > indirect > background-potential.',
+    '',
+    '## Hierarchy preference (event nodes)',
+    'Event candidates carry semantic_depth (0 = leaf, 1+ = rollup), parent_id, and child_count. When both a rollup and one of its descendant leaves are in candidate_nodes:',
+    '  - Prefer the LEAF when this turn needs specifics (a paraphrased line, a specific action, a specific reaction, exact items / promises / damage).',
+    '  - Prefer the ROLLUP when this turn needs gist over a long span and per-scene detail would dilute the signal.',
+    '  - Avoid selecting both for the same storyline — the rollup was synthesised from those leaves, so the two views overlap and the budget would be wasted.',
+    'When picking detail leaves, choose only the few most causally relevant ones; do not pick an entire sibling group just because their parent is relevant.',
+    '',
+    'Output selected_node_ids in priority order (highest value first).',
+    'Prefer a compact set (typically 3-8 when available) instead of selecting everything.',
+    'Always-inject nodes are already injected separately. Never include them in selected_node_ids.',
+    'If no candidate is grounded and useful, return an empty list rather than forcing weak picks or inventing links.',
+    'Be explicit and honest when returning empty selection.',
+    'Never hallucinate facts not grounded in candidates.',
+    'FINAL OUTPUT CONTRACT (ABSOLUTE): return EXACTLY two parts in order: (1) one <thought>...</thought>; (2) function call output only.',
+    'Do not output any narrative/body text, markdown, code fences, XML blocks (except <thought>), comments, or any extra JSON payload.',
+    'After function call output, stop immediately.',
+].join('\n');
+
+export const DEFAULT_RAG_REWRITE_SYSTEM_PROMPT = [
+    'You rewrite the user\'s most recent conversational context into a single concise sentence in the dialogue\'s language that maximizes vector-search recall of related past events from a long-form roleplay\'s memory graph.',
+    '',
+    'Output requirements:',
+    '- Exactly one sentence, 15-40 characters (for CJK) or 8-25 words (for Latin scripts).',
+    '- State the SUBSTANCE the user wants recalled (a past event, scene, or fact), NOT the meta-instruction to recall.',
+    '- Use entity names and concrete verbs that would appear verbatim in summarized event records. Prefer "<actor> <verb> <object>" form. Avoid abstract framing like "讨论某事" or "talked about something" — name the act directly.',
+    '- Drop pronouns, filler, and current scene setup; keep only what identifies the callback target.',
+    '- Resolve ambiguous references to a named entity when context supports it, otherwise omit.',
+    '- Never invent facts not present in the dialogue.',
+    '- If the dialogue contains no clear callback intent toward a prior memory, output the most salient concrete action and its named actor from the recent turns instead.',
+    '',
+    'FINAL OUTPUT CONTRACT: return EXACTLY one function call to rewrite_recall_query with the sentence. No prose, no markdown, no extra text.',
+].join('\n');

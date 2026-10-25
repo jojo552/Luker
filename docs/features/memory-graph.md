@@ -204,7 +204,7 @@ Open the graph studio from either place:
 
 ![Robot button in the graph viewer toolbar](/images/memory-graph/memory-ai-revise-graph-view.png)
 
-Both open the same popup, scoped to the current chat. Before the first run, pick the **Iteration AI** connection profile and prompt preset in the same Advanced section (the pair is shared with the schema studio). To replace the built-in instructions, edit **Graph Revision Prompt**; leave it empty to use the default.
+Both open the same popup, scoped to the current chat. Before the first run, pick the **Iteration AI** connection profile and prompt preset in the same Advanced section (the pair is shared with the configuration studio). To replace the built-in instructions, edit **Graph Revision Prompt**; leave it empty to use the default.
 
 Describe what's wrong in plain language. The studio reads the graph on demand — and the chat or your world books when that helps — then turns its plan into reviewable cards:
 
@@ -224,6 +224,16 @@ Changes are staged as one card, with records shown separately. **Approve** appli
 ::: tip Treat it as a conversation
 Ask follow-up questions or point at a specific node — the studio reads on demand, so it can explain or revise its plan across rounds. Approve what's right and reject the rest.
 :::
+
+## Configure the graph with AI
+
+The schema, extraction and recall prompts, node-type extraction hints, and behavior parameters live in one configuration studio. Open it from **Advanced** → **AI Configure Memory Graph**.
+
+Describe the outcome you want. The studio lists the available fields, reads only the values it needs, and stages every change as a reviewable card. Approve a card to write it.
+
+With a character selected, changes are stored on that card. Parameter and prompt writes are sparse: only keys that differ from the global values are stored, so later global edits still apply to the rest. Without a character, changes go to global settings.
+
+The manual schema editor and the Advanced fields remain available. To replace the studio's own instructions, edit **Configuration Iteration Prompt**; leave it empty to use the built-in default.
 
 ## I want…
 

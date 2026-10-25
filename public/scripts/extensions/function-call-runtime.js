@@ -824,15 +824,11 @@ export function extractDisplayTextFromPlainTextFunctionResponse(rawText, options
         }
     }
 
-    const xmlBlocks = extractAllXmlTagBlocks(source, FUNCTION_CALLS_TAG);
-    for (let index = xmlBlocks.length - 1; index >= 0; index -= 1) {
-        const block = xmlBlocks[index];
-        const suffix = source.slice(block.start).trim();
-        if (!suffix.startsWith(`<${FUNCTION_CALLS_TAG}>`)) {
-            continue;
-        }
-        return source.slice(0, block.start).trim();
-    }
+    // No trigger signal found: nothing was parsed out of this text, so the
+    // reply is returned verbatim. An unparsed <function_calls> payload is a
+    // protocol violation that belongs in the visible assistant text —
+    // stripping it here would silently destroy the model's output and leave
+    // the caller with an empty reply that misreports "no tool calls".
     return source;
 }
 

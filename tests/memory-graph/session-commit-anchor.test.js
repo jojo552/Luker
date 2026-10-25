@@ -83,8 +83,8 @@ jest.unstable_mockModule('../../public/scripts/extensions.js', () => ({
     registerExtensionApi: () => {},
     UNSET_VALUE: Symbol('UNSET_VALUE'),
 }));
-jest.unstable_mockModule('../../public/scripts/extensions/memory-graph/schema-iteration/studio.js', () => ({
-    openSchemaIterationStudio: () => Promise.resolve(),
+jest.unstable_mockModule('../../public/scripts/extensions/memory-graph/config-iteration/studio.js', () => ({
+    openConfigIterationStudio: () => Promise.resolve(),
 }));
 jest.unstable_mockModule('../../public/scripts/extensions/memory-graph/graph-iteration/studio.js', () => ({
     openGraphIterationStudio: () => Promise.resolve(),

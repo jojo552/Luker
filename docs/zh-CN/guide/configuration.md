@@ -228,6 +228,7 @@ thumbnails:
 requestInspector:
   ttlMs: 7200000
   cleanupIntervalMs: 300000
+  byteBudgetBytes: 268435456
 
 disableUpdateCheck: false
 generationAckGraceMs: 15000

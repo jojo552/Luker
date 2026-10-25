@@ -44,6 +44,7 @@ import {
     persistCharacterSchemaOverride,
     removeCharacterSchemaOverride,
     persistCharacterAdvancedOverride,
+    persistCharacterAdvancedOverridePatch,
     removeCharacterAdvancedOverride,
 } from './character-overrides.js';
 import { registerMemoryGraphCardBindingSlot } from './card-binding-slot.js';
@@ -56,15 +57,32 @@ import {
     buildSchemaExportPayload,
     parseSchemaImportPayload,
 } from './import-export.js';
-import { openSchemaIterationStudio } from './schema-iteration/studio.js';
-import { DEFAULT_SCHEMA_ITER_SYSTEM_PROMPT } from './schema-iteration/system-prompt.js';
+import { openConfigIterationStudio } from './config-iteration/studio.js';
+import { DEFAULT_CONFIG_ITER_SYSTEM_PROMPT } from './config-iteration/system-prompt.js';
+import { migrateConfigIterationPrompt } from './config-iteration/prompt-migration.js';
 import { openGraphIterationStudio } from './graph-iteration/studio.js';
 import {
     DEFAULT_EXTRACT_EDGE_RULES,
     DEFAULT_EXTRACT_TEMPLATE,
     DEFAULT_EVENT_COMPRESS_INSTRUCTION,
     DEFAULT_CRAWL_SYSTEM_PROMPT,
+    DEFAULT_RAG_REWRITE_SYSTEM_PROMPT,
+    DEFAULT_RECALL_FINALIZE_SYSTEM_PROMPT,
+    DEFAULT_RECALL_ROUTE_SYSTEM_PROMPT,
 } from './default-prompts.js';
+import {
+    ADVANCED_SETTING_DEFAULTS,
+    applyAdvancedSettings,
+    normalizeAdvancedSettings,
+    normalizeExtractExcludeRecentTurns,
+    sanitizeRecallQueryMessages,
+} from './config-iteration/advanced-settings.js';
+export {
+    applyAdvancedSettings,
+    normalizeAdvancedSettings,
+    normalizeExtractExcludeRecentTurns,
+    sanitizeRecallQueryMessages,
+};
 import { registerManagedRegexProvider, regex_placement, substitute_find_regex } from '../regex/engine.js';
 import { computeDepthsFromEnd } from '../../lib/chat-regex.js';
 import { cookPluginFloorText } from '../../lib/plugin-floors.js';
@@ -322,87 +340,6 @@ const defaultNodeTypeSchema = [
     },
 ];
 
-const DEFAULT_RECALL_ROUTE_SYSTEM_PROMPT = [
-    'You are a memory recall planner focused on relevance, continuity, and efficiency.',
-    'You must output exactly one short <thought>...</thought> before tool call to explain your plan.',
-    'Input format: XML blocks (recall_query_context, candidate_nodes, always_inject_node_ids, schema_overview, selection_constraints). Read all blocks before deciding.',
-    'First, extract a compact query profile from recall_query_context: active entities, locations, goals, unresolved commitments, relationship/emotion shifts, and causal constraints.',
-    'Do not rely on keywords only. Use semantic cues, intent, and causal context from recent dialogue.',
-    'Primary goal: pick the smallest high-value set that best supports the CURRENT scene and next reply.',
-    'Apply layered relevance explicitly: (1) direct relevance to this turn, (2) indirect continuity support, (3) background context with clear potential impact.',
-    'Rank candidates by practical usefulness now: direct event support, causality continuity, unresolved commitments/constraints, and key character/location/rule grounding.',
-    'Use edge_summary to follow relation chains and avoid isolated picks.',
-    '',
-    '## Hierarchy awareness (event nodes form a multi-layer tree)',
-    'Each candidate carries three structural fields:',
-    '  - semantic_depth: 0 = leaf (one source-batch event); 1+ = rollup that compresses N children into one milestone.',
-    '  - parent_id: id of the rollup that contains this node, if any.',
-    '  - child_count: number of immediate children this node summarises (0 for leaves).',
-    'Mental model: deeper into the tree = more abstract over a longer span; closer to the leaves = richer scene-specific detail (paraphrased lines, specific actions, specific reactions, posture / scene / sensory cues). The same storyline exists at multiple zoom levels.',
-    'You do NOT have to drill — finalize is fine when the current candidate set already covers the need. The hierarchy is a tool, not an obligation.',
-    '',
-    '## When to drill (use sparingly)',
-    'Drill when a rollup looks topically on-target but, by design, has compressed away the specifics this turn needs — e.g. what exactly was promised, who reacted how, what one specific ally did, what items changed hands, what the scene felt like.',
-    'Do NOT drill when:',
-    '  - The rollup\'s abstract gist is enough (continuation, background context).',
-    '  - No rollup is topically relevant — drilling will not create relevance.',
-    '  - The needed detail is already present in another candidate at lower depth.',
-    'How drill works: set action="drill" and put 1-2 high-value rollups in expand_plan as seed_node_id with include_children:true (the system will pull their immediate children into the next-pass candidate set). Keep depth small (1 unless grand-children are clearly needed). Wide drilling wastes budget.',
-    '',
-    'Return action="finalize" if current candidates are sufficient.',
-    'Return action="drill" only when extra expansion is clearly needed for missing context.',
-    'When drilling, expand around high-value seeds instead of broad expansion.',
-    'Always-inject nodes are already injected separately. Never include them in selected_node_ids.',
-    'Do not fabricate missing facts. If grounded evidence is weak or absent, prefer conservative selection or empty selection and explain briefly in reason.',
-    'Be honest: if no grounded memory should be recalled, return finalize with empty selected_node_ids.',
-    'FINAL OUTPUT CONTRACT (ABSOLUTE): return EXACTLY two parts in order: (1) one <thought>...</thought>; (2) function call output only.',
-    'Do not output any narrative/body text, markdown, code fences, XML blocks (except <thought>), comments, or any extra JSON payload.',
-    'After function call output, stop immediately.',
-].join('\n');
-
-const DEFAULT_RECALL_FINALIZE_SYSTEM_PROMPT = [
-    'You are finalizing memory recall node selection after optional drill expansion.',
-    'You must output exactly one short <thought>...</thought> before tool call to explain your final tradeoff.',
-    'Input format: XML blocks (recall_query_context, candidate_nodes, always_inject_node_ids, route_result, selection_constraints). Read all blocks before deciding.',
-    'Before selecting, extract the key information needs of this turn from context: who/where/what is active, what must stay continuous, and what unknowns matter now.',
-    'Do not rely on keywords only. Use semantic intent and causal continuity.',
-    'Select nodes that maximize practical value for the immediate next reply.',
-    'Keep storyline continuity first, then add essential support nodes (character/location/rule) only when they materially improve correctness.',
-    'Apply layered relevance in final ranking: direct > indirect > background-potential.',
-    '',
-    '## Hierarchy preference (event nodes)',
-    'Event candidates carry semantic_depth (0 = leaf, 1+ = rollup), parent_id, and child_count. When both a rollup and one of its descendant leaves are in candidate_nodes:',
-    '  - Prefer the LEAF when this turn needs specifics (a paraphrased line, a specific action, a specific reaction, exact items / promises / damage).',
-    '  - Prefer the ROLLUP when this turn needs gist over a long span and per-scene detail would dilute the signal.',
-    '  - Avoid selecting both for the same storyline — the rollup was synthesised from those leaves, so the two views overlap and the budget would be wasted.',
-    'When picking detail leaves, choose only the few most causally relevant ones; do not pick an entire sibling group just because their parent is relevant.',
-    '',
-    'Output selected_node_ids in priority order (highest value first).',
-    'Prefer a compact set (typically 3-8 when available) instead of selecting everything.',
-    'Always-inject nodes are already injected separately. Never include them in selected_node_ids.',
-    'If no candidate is grounded and useful, return an empty list rather than forcing weak picks or inventing links.',
-    'Be explicit and honest when returning empty selection.',
-    'Never hallucinate facts not grounded in candidates.',
-    'FINAL OUTPUT CONTRACT (ABSOLUTE): return EXACTLY two parts in order: (1) one <thought>...</thought>; (2) function call output only.',
-    'Do not output any narrative/body text, markdown, code fences, XML blocks (except <thought>), comments, or any extra JSON payload.',
-    'After function call output, stop immediately.',
-].join('\n');
-
-const DEFAULT_RAG_REWRITE_SYSTEM_PROMPT = [
-    'You rewrite the user\'s most recent conversational context into a single concise sentence in the dialogue\'s language that maximizes vector-search recall of related past events from a long-form roleplay\'s memory graph.',
-    '',
-    'Output requirements:',
-    '- Exactly one sentence, 15-40 characters (for CJK) or 8-25 words (for Latin scripts).',
-    '- State the SUBSTANCE the user wants recalled (a past event, scene, or fact), NOT the meta-instruction to recall.',
-    '- Use entity names and concrete verbs that would appear verbatim in summarized event records. Prefer "<actor> <verb> <object>" form. Avoid abstract framing like "讨论某事" or "talked about something" — name the act directly.',
-    '- Drop pronouns, filler, and current scene setup; keep only what identifies the callback target.',
-    '- Resolve ambiguous references to a named entity when context supports it, otherwise omit.',
-    '- Never invent facts not present in the dialogue.',
-    '- If the dialogue contains no clear callback intent toward a prior memory, output the most salient concrete action and its named actor from the recent turns instead.',
-    '',
-    'FINAL OUTPUT CONTRACT: return EXACTLY one function call to rewrite_recall_query with the sentence. No prose, no markdown, no extra text.',
-].join('\n');
-
 const CANONICAL_EXTRACT_RELATION_TYPES = [
     // Generic graph relations (existing)
     'related', 'involved_in', 'occurred_at', 'mentions', 'evidence', 'updates', 'advances',
@@ -419,10 +356,7 @@ export const defaultSettings = {
     enabled: false,
     autoExtractionEnabled: true,
     autoCompressionEnabled: true,
-    extractMode: 'oneshot',
-    extractCrawlMaxRounds: 3,
-    extractCrawlCandidateLimit: 40,
-    extractCrawlMaxReads: 12,
+    ...ADVANCED_SETTING_DEFAULTS,
     updateEvery: 1,
     maxTurns: 900,
     recallEnabled: true,
@@ -432,24 +366,10 @@ export const defaultSettings = {
     recallInjectRole: extension_prompt_roles.SYSTEM,
     recallApiPresetName: '',
     recallPresetName: '',
-    includeWorldInfoWithPreset: true,
-    toolCallRetryMax: 2,
-    recallMaxIterations: 3,
-    recallRouteSystemPrompt: DEFAULT_RECALL_ROUTE_SYSTEM_PROMPT,
-    recallFinalizeSystemPrompt: DEFAULT_RECALL_FINALIZE_SYSTEM_PROMPT,
     extractApiPresetName: '',
     extractPresetName: '',
     requestApiPresetName: '',
     requestLlmPresetName: '',
-    extractCrawlSystemPrompt: DEFAULT_CRAWL_SYSTEM_PROMPT,
-    schemaIterSystemPrompt: DEFAULT_SCHEMA_ITER_SYSTEM_PROMPT,
-    extractBatchTurns: 1,
-    extractContextTurns: 2,
-    extractExcludeRecentTurns: 0,
-    recallQueryMessages: 2,
-    recentRawTurns: 2,
-    persistentInjectionMaxSeqDistance: 0,
-    llmVisibleRecentMessages: 5,
     lorebookNameOverride: '',
     lorebookEntryOrderBase: 9800,
     nodeTypeSchema: defaultNodeTypeSchema,
@@ -468,8 +388,6 @@ export const defaultSettings = {
     ragUseQueryRewrite: false,
     ragRewriteApiPresetName: '',
     ragRewriteLlmPresetName: '',
-    ragRewriteSystemPrompt: DEFAULT_RAG_REWRITE_SYSTEM_PROMPT,
-    rpmLimit: 0,
 };
 
 
@@ -756,19 +674,6 @@ function normalizeRecallInjectRole(value) {
     return allowed.includes(numeric) ? numeric : extension_prompt_roles.SYSTEM;
 }
 
-function normalizeExtractExcludeRecentTurns(value) {
-    return Math.max(0, Math.floor(Number(value) || 0));
-}
-
-function sanitizeRecallQueryMessages(rawValue, fallback = defaultSettings.recallQueryMessages) {
-    const num = Number(rawValue);
-    const fallbackNum = Number(fallback);
-    const effective = Number.isFinite(num)
-        ? num
-        : (Number.isFinite(fallbackNum) ? fallbackNum : 2);
-    return Math.max(0, Math.min(64, Math.floor(effective)));
-}
-
 function getExtractableLatestSeq(totalTurns, settings = null) {
     const total = Math.max(0, Math.floor(Number(totalTurns || 0)));
     const excludedRecentTurns = normalizeExtractExcludeRecentTurns(
@@ -792,6 +697,16 @@ function ensureSettings() {
         }
     }
 
+    // One-shot: carry a user-authored legacy schema prompt into the
+    // configuration prompt slot. Must run before the legacy normalization
+    // below rewrites the old key with the retired default.
+    migrateConfigIterationPrompt(extension_settings[MODULE_NAME]);
+
+    const normalizedAdvanced = normalizeAdvancedSettings(extension_settings[MODULE_NAME], defaultSettings);
+    for (const key of Object.keys(ADVANCED_SETTING_DEFAULTS)) {
+        extension_settings[MODULE_NAME][key] = normalizedAdvanced[key];
+    }
+
     // Legacy migration: convert old embeddingSource/embeddingModel + rerankSource/rerankModel
     // into Connection Manager profiles so memory-graph stops reading the vectors plugin's
     // private settings.
@@ -806,14 +721,6 @@ function ensureSettings() {
         delete extension_settings[MODULE_NAME].schemaIterationPresetName;
     }
 
-    extension_settings[MODULE_NAME].toolCallRetryMax = Math.max(
-        0,
-        Math.min(10, Math.floor(Number(extension_settings[MODULE_NAME].toolCallRetryMax) || 0)),
-    );
-    extension_settings[MODULE_NAME].rpmLimit = Math.max(
-        0,
-        Math.floor(Number(extension_settings[MODULE_NAME].rpmLimit) || 0),
-    );
     if (!hasRecallInjectPositionSchemaVersion) {
         extension_settings[MODULE_NAME].recallInjectPosition = migrateLegacyRecallInjectPosition(
             extension_settings[MODULE_NAME].recallInjectPosition,
@@ -832,60 +739,12 @@ function ensureSettings() {
         1,
         Math.floor(Number(extension_settings[MODULE_NAME].updateEvery) || defaultSettings.updateEvery),
     );
-    extension_settings[MODULE_NAME].recallMaxIterations = Math.max(
-        2,
-        Math.min(6, Math.floor(Number(extension_settings[MODULE_NAME].recallMaxIterations) || defaultSettings.recallMaxIterations)),
-    );
-    const extractBatchTurnsRaw = Number(extension_settings[MODULE_NAME].extractBatchTurns);
-    const extractContextTurnsRaw = Number(extension_settings[MODULE_NAME].extractContextTurns);
-    const extractExcludeRecentTurnsRaw = Number(extension_settings[MODULE_NAME].extractExcludeRecentTurns);
-    const recentRawTurnsRaw = Number(extension_settings[MODULE_NAME].recentRawTurns);
-    const llmVisibleRecentMessagesRaw = Number(extension_settings[MODULE_NAME].llmVisibleRecentMessages);
-    const persistentInjectionMaxSeqDistanceRaw = Number(extension_settings[MODULE_NAME].persistentInjectionMaxSeqDistance);
-    extension_settings[MODULE_NAME].extractBatchTurns = Math.max(
-        1,
-        Math.floor(Number.isFinite(extractBatchTurnsRaw) ? extractBatchTurnsRaw : defaultSettings.extractBatchTurns),
-    );
-    extension_settings[MODULE_NAME].extractContextTurns = Math.max(
-        1,
-        Math.min(32, Math.floor(Number.isFinite(extractContextTurnsRaw) ? extractContextTurnsRaw : defaultSettings.extractContextTurns)),
-    );
-    extension_settings[MODULE_NAME].extractExcludeRecentTurns = normalizeExtractExcludeRecentTurns(
-        Number.isFinite(extractExcludeRecentTurnsRaw) ? extractExcludeRecentTurnsRaw : defaultSettings.extractExcludeRecentTurns,
-    );
-    extension_settings[MODULE_NAME].recallQueryMessages = sanitizeRecallQueryMessages(
-        extension_settings[MODULE_NAME].recallQueryMessages,
-    );
-    extension_settings[MODULE_NAME].recentRawTurns = Math.max(
-        0,
-        Math.floor(Number.isFinite(recentRawTurnsRaw) ? recentRawTurnsRaw : defaultSettings.recentRawTurns),
-    );
-    extension_settings[MODULE_NAME].llmVisibleRecentMessages = Math.max(
-        0,
-        Math.min(200, Math.floor(Number.isFinite(llmVisibleRecentMessagesRaw) ? llmVisibleRecentMessagesRaw : defaultSettings.llmVisibleRecentMessages)),
-    );
-    extension_settings[MODULE_NAME].persistentInjectionMaxSeqDistance = Math.max(
-        0,
-        Math.floor(Number.isFinite(persistentInjectionMaxSeqDistanceRaw) ? persistentInjectionMaxSeqDistanceRaw : defaultSettings.persistentInjectionMaxSeqDistance),
-    );
     // RAG per-type quota default. 0 disables bucketing (single shared pool).
     const ragDefaultPerTypeKRaw = Number(extension_settings[MODULE_NAME].ragDefaultPerTypeK);
     extension_settings[MODULE_NAME].ragDefaultPerTypeK = Math.max(
         0,
         Math.min(50, Math.floor(Number.isFinite(ragDefaultPerTypeKRaw) ? ragDefaultPerTypeKRaw : defaultSettings.ragDefaultPerTypeK)),
     );
-    extension_settings[MODULE_NAME].includeWorldInfoWithPreset = extension_settings[MODULE_NAME].includeWorldInfoWithPreset !== false;
-    extension_settings[MODULE_NAME].extractMode = ['oneshot', 'crawl'].includes(String(extension_settings[MODULE_NAME].extractMode || '').trim().toLowerCase())
-        ? String(extension_settings[MODULE_NAME].extractMode).trim().toLowerCase()
-        : defaultSettings.extractMode;
-    extension_settings[MODULE_NAME].extractCrawlMaxRounds = Math.max(1, Math.min(5, Math.floor(Number(extension_settings[MODULE_NAME].extractCrawlMaxRounds) || defaultSettings.extractCrawlMaxRounds)));
-    extension_settings[MODULE_NAME].extractCrawlCandidateLimit = Math.max(10, Math.min(100, Math.floor(Number(extension_settings[MODULE_NAME].extractCrawlCandidateLimit) || defaultSettings.extractCrawlCandidateLimit)));
-    extension_settings[MODULE_NAME].extractCrawlMaxReads = Math.max(1, Math.min(30, Math.floor(Number(extension_settings[MODULE_NAME].extractCrawlMaxReads) || defaultSettings.extractCrawlMaxReads)));
-    extension_settings[MODULE_NAME].extractCrawlSystemPrompt = String(extension_settings[MODULE_NAME].extractCrawlSystemPrompt || '').trim() || DEFAULT_CRAWL_SYSTEM_PROMPT;
-    extension_settings[MODULE_NAME].schemaIterSystemPrompt = String(extension_settings[MODULE_NAME].schemaIterSystemPrompt || '').trim() || DEFAULT_SCHEMA_ITER_SYSTEM_PROMPT;
-    extension_settings[MODULE_NAME].recallRouteSystemPrompt = String(extension_settings[MODULE_NAME].recallRouteSystemPrompt || '').trim() || DEFAULT_RECALL_ROUTE_SYSTEM_PROMPT;
-    extension_settings[MODULE_NAME].recallFinalizeSystemPrompt = String(extension_settings[MODULE_NAME].recallFinalizeSystemPrompt || '').trim() || DEFAULT_RECALL_FINALIZE_SYSTEM_PROMPT;
-    extension_settings[MODULE_NAME].ragRewriteSystemPrompt = String(extension_settings[MODULE_NAME].ragRewriteSystemPrompt || '').trim() || DEFAULT_RAG_REWRITE_SYSTEM_PROMPT;
     extension_settings[MODULE_NAME].nodeTypeSchema = normalizeNodeTypeSchema(extension_settings[MODULE_NAME].nodeTypeSchema);
 
     normalizeLegacyRecallSettings(extension_settings[MODULE_NAME]);
@@ -935,122 +794,6 @@ export function normalizeLegacyRecallSettings(settings) {
 
 export function getSettings() {
     return extension_settings[MODULE_NAME];
-}
-
-export function normalizeAdvancedSettings(source = null, fallbackSource = null) {
-    const base = fallbackSource && typeof fallbackSource === 'object' ? fallbackSource : defaultSettings;
-    const input = source && typeof source === 'object' ? source : {};
-    const extractMode = ['oneshot', 'crawl'].includes(String(input.extractMode || '').trim().toLowerCase())
-        ? String(input.extractMode).trim().toLowerCase()
-        : String(base.extractMode || defaultSettings.extractMode);
-    const extractCrawlMaxRoundsRaw = Number(input.extractCrawlMaxRounds);
-    const extractCrawlCandidateLimitRaw = Number(input.extractCrawlCandidateLimit);
-    const extractCrawlMaxReadsRaw = Number(input.extractCrawlMaxReads);
-    const extractBatchTurnsRaw = Number(input.extractBatchTurns);
-    const extractContextTurnsRaw = Number(input.extractContextTurns);
-    const extractExcludeRecentTurnsRaw = Number(input.extractExcludeRecentTurns);
-    const recentRawTurnsRaw = Number(input.recentRawTurns);
-    const llmVisibleRecentMessagesRaw = Number(input.llmVisibleRecentMessages);
-    const persistentInjectionMaxSeqDistanceRaw = Number(input.persistentInjectionMaxSeqDistance);
-    const recallIterationsRaw = Number(input.recallMaxIterations);
-    const toolRetryRaw = Number(input.toolCallRetryMax);
-    const rpmLimitRaw = Number(input.rpmLimit);
-    return {
-        recentRawTurns: Math.max(
-            0,
-            Math.floor(Number.isFinite(recentRawTurnsRaw) ? recentRawTurnsRaw : Number(base.recentRawTurns ?? defaultSettings.recentRawTurns)),
-        ),
-        persistentInjectionMaxSeqDistance: Math.max(
-            0,
-            Math.floor(Number.isFinite(persistentInjectionMaxSeqDistanceRaw) ? persistentInjectionMaxSeqDistanceRaw : Number(base.persistentInjectionMaxSeqDistance ?? defaultSettings.persistentInjectionMaxSeqDistance)),
-        ),
-        llmVisibleRecentMessages: Math.max(
-            0,
-            Math.min(200, Math.floor(Number.isFinite(llmVisibleRecentMessagesRaw) ? llmVisibleRecentMessagesRaw : Number(base.llmVisibleRecentMessages ?? defaultSettings.llmVisibleRecentMessages))),
-        ),
-        recallMaxIterations: Math.max(
-            2,
-            Math.min(6, Math.floor(Number.isFinite(recallIterationsRaw) ? recallIterationsRaw : Number(base.recallMaxIterations || defaultSettings.recallMaxIterations))),
-        ),
-        toolCallRetryMax: Math.max(
-            0,
-            Math.min(10, Math.floor(Number.isFinite(toolRetryRaw) ? toolRetryRaw : Number(base.toolCallRetryMax || defaultSettings.toolCallRetryMax))),
-        ),
-        extractExcludeRecentTurns: normalizeExtractExcludeRecentTurns(
-            Number.isFinite(extractExcludeRecentTurnsRaw)
-                ? extractExcludeRecentTurnsRaw
-                : Number(base.extractExcludeRecentTurns ?? defaultSettings.extractExcludeRecentTurns),
-        ),
-        extractContextTurns: Math.max(
-            1,
-            Math.min(32, Math.floor(Number.isFinite(extractContextTurnsRaw) ? extractContextTurnsRaw : Number(base.extractContextTurns || defaultSettings.extractContextTurns))),
-        ),
-        recallQueryMessages: sanitizeRecallQueryMessages(
-            input.recallQueryMessages,
-            Number.isFinite(Number(base.recallQueryMessages)) ? Number(base.recallQueryMessages) : defaultSettings.recallQueryMessages,
-        ),
-        extractBatchTurns: Math.max(
-            1,
-            Math.floor(Number.isFinite(extractBatchTurnsRaw) ? extractBatchTurnsRaw : Number(base.extractBatchTurns || defaultSettings.extractBatchTurns)),
-        ),
-        rpmLimit: Math.max(
-            0,
-            Math.floor(Number.isFinite(rpmLimitRaw) ? rpmLimitRaw : Number(base.rpmLimit ?? defaultSettings.rpmLimit)),
-        ),
-        extractMode,
-        extractConcurrent: typeof input.extractConcurrent === 'boolean' ? input.extractConcurrent : (typeof base.extractConcurrent === 'boolean' ? base.extractConcurrent : false),
-        extractCrawlMaxRounds: Math.max(1, Math.min(5, Math.floor(Number.isFinite(extractCrawlMaxRoundsRaw) ? extractCrawlMaxRoundsRaw : Number(base.extractCrawlMaxRounds ?? defaultSettings.extractCrawlMaxRounds)))),
-        extractCrawlCandidateLimit: Math.max(10, Math.min(100, Math.floor(Number.isFinite(extractCrawlCandidateLimitRaw) ? extractCrawlCandidateLimitRaw : Number(base.extractCrawlCandidateLimit ?? defaultSettings.extractCrawlCandidateLimit)))),
-        extractCrawlMaxReads: Math.max(1, Math.min(30, Math.floor(Number.isFinite(extractCrawlMaxReadsRaw) ? extractCrawlMaxReadsRaw : Number(base.extractCrawlMaxReads ?? defaultSettings.extractCrawlMaxReads)))),
-        // The extraction template and edge rules fall back to their code
-        // constants at use time, never here: a default written into a slot
-        // would freeze the constant for that user. The slots carry user input
-        // alone.
-        extractTemplate: String(input.extractTemplate || '').trim() || String(base.extractTemplate || ''),
-        extractEdgeRules: String(input.extractEdgeRules || '').trim() || String(base.extractEdgeRules || ''),
-        extractCrawlSystemPrompt: String(input.extractCrawlSystemPrompt || '').trim() || String(base.extractCrawlSystemPrompt || DEFAULT_CRAWL_SYSTEM_PROMPT),
-        schemaIterSystemPrompt: String(input.schemaIterSystemPrompt || '').trim() || String(base.schemaIterSystemPrompt || DEFAULT_SCHEMA_ITER_SYSTEM_PROMPT),
-        graphIterSystemPrompt: String(input.graphIterSystemPrompt || '').trim() || String(base.graphIterSystemPrompt || ''),
-        recallRouteSystemPrompt: String(input.recallRouteSystemPrompt || '').trim() || String(base.recallRouteSystemPrompt || DEFAULT_RECALL_ROUTE_SYSTEM_PROMPT),
-        recallFinalizeSystemPrompt: String(input.recallFinalizeSystemPrompt || '').trim() || String(base.recallFinalizeSystemPrompt || DEFAULT_RECALL_FINALIZE_SYSTEM_PROMPT),
-        ragRewriteSystemPrompt: String(input.ragRewriteSystemPrompt || '').trim() || String(base.ragRewriteSystemPrompt || DEFAULT_RAG_REWRITE_SYSTEM_PROMPT),
-        includeWorldInfoWithPreset: (
-            typeof input.includeWorldInfoWithPreset === 'boolean'
-                ? input.includeWorldInfoWithPreset
-                : (typeof base.includeWorldInfoWithPreset === 'boolean' ? base.includeWorldInfoWithPreset : true)
-        ),
-    };
-}
-
-function applyAdvancedSettings(target, values) {
-    if (!target || typeof target !== 'object') {
-        return;
-    }
-    const normalized = normalizeAdvancedSettings(values, target);
-    target.recentRawTurns = normalized.recentRawTurns;
-    target.persistentInjectionMaxSeqDistance = normalized.persistentInjectionMaxSeqDistance;
-    target.llmVisibleRecentMessages = normalized.llmVisibleRecentMessages;
-    target.recallMaxIterations = normalized.recallMaxIterations;
-    target.toolCallRetryMax = normalized.toolCallRetryMax;
-    target.rpmLimit = normalized.rpmLimit;
-    target.extractExcludeRecentTurns = normalized.extractExcludeRecentTurns;
-    target.extractContextTurns = normalized.extractContextTurns;
-    target.recallQueryMessages = normalized.recallQueryMessages;
-    target.extractBatchTurns = normalized.extractBatchTurns;
-    target.extractMode = normalized.extractMode;
-    target.extractConcurrent = normalized.extractConcurrent;
-    target.extractCrawlMaxRounds = normalized.extractCrawlMaxRounds;
-    target.extractCrawlCandidateLimit = normalized.extractCrawlCandidateLimit;
-    target.extractCrawlMaxReads = normalized.extractCrawlMaxReads;
-    target.extractTemplate = normalized.extractTemplate;
-    target.extractEdgeRules = normalized.extractEdgeRules;
-    target.extractCrawlSystemPrompt = normalized.extractCrawlSystemPrompt;
-    target.schemaIterSystemPrompt = normalized.schemaIterSystemPrompt;
-    target.graphIterSystemPrompt = normalized.graphIterSystemPrompt;
-    target.recallRouteSystemPrompt = normalized.recallRouteSystemPrompt;
-    target.recallFinalizeSystemPrompt = normalized.recallFinalizeSystemPrompt;
-    target.ragRewriteSystemPrompt = normalized.ragRewriteSystemPrompt;
-    target.includeWorldInfoWithPreset = normalized.includeWorldInfoWithPreset;
 }
 
 
@@ -1868,7 +1611,7 @@ export async function ensureMemoryStoreLoaded(context, { force = false } = {}) {
     }
 }
 
-export function getMemoryStore(context) {
+function getMemoryStore(context) {
     const chatKey = getChatKey(context);
     return memoryStoreCache.get(chatKey) || null;
 }
@@ -7794,7 +7537,7 @@ export function getLatestSeqIndex(store) {
 // intentionally do NOT pass this (recall candidate pool must remain
 // unaffected by the injection window so new always-inject nodes stay
 // recallable when relevant).
-export function computeRecentRawWindowFrom(store, settings) {
+function computeRecentRawWindowFrom(store, settings) {
     const recentRawTurns = Math.max(
         0,
         Math.floor(Number(settings?.recentRawTurns ?? defaultSettings.recentRawTurns)),
@@ -14695,7 +14438,7 @@ function hydrateAdvancedTabFields(root, source) {
     root.find('#luker_rpg_memory_advanced_recall_route_prompt').val(String(source.recallRouteSystemPrompt || DEFAULT_RECALL_ROUTE_SYSTEM_PROMPT));
     root.find('#luker_rpg_memory_advanced_recall_finalize_prompt').val(String(source.recallFinalizeSystemPrompt || DEFAULT_RECALL_FINALIZE_SYSTEM_PROMPT));
     root.find('#luker_rpg_memory_advanced_rag_rewrite_prompt').val(String(source.ragRewriteSystemPrompt || DEFAULT_RAG_REWRITE_SYSTEM_PROMPT));
-    root.find('#luker_rpg_memory_advanced_schema_iter_system_prompt').val(String(source.schemaIterSystemPrompt || DEFAULT_SCHEMA_ITER_SYSTEM_PROMPT));
+    root.find('#luker_rpg_memory_advanced_config_iter_system_prompt').val(String(source.configIterSystemPrompt || DEFAULT_CONFIG_ITER_SYSTEM_PROMPT));
     root.find('#luker_rpg_memory_advanced_graph_iter_system_prompt').val(String(source.graphIterSystemPrompt || ''));
     const ragRewriteVisible = String(source.recallMethod || 'llm') === 'rag' && Boolean(source.ragUseQueryRewrite);
     root.find('#luker_rpg_memory_advanced_rag_rewrite_prompt_block').toggle(ragRewriteVisible);
@@ -14726,13 +14469,18 @@ function readAdvancedTabFields(root) {
         recallRouteSystemPrompt: String(root.find('#luker_rpg_memory_advanced_recall_route_prompt').val() || '').trim(),
         recallFinalizeSystemPrompt: String(root.find('#luker_rpg_memory_advanced_recall_finalize_prompt').val() || '').trim(),
         ragRewriteSystemPrompt: String(root.find('#luker_rpg_memory_advanced_rag_rewrite_prompt').val() || '').trim(),
-        schemaIterSystemPrompt: String(root.find('#luker_rpg_memory_advanced_schema_iter_system_prompt').val() || '').trim(),
+        configIterSystemPrompt: String(root.find('#luker_rpg_memory_advanced_config_iter_system_prompt').val() || '').trim(),
         graphIterSystemPrompt: String(root.find('#luker_rpg_memory_advanced_graph_iter_system_prompt').val() || '').trim(),
     };
 }
 
 function markAdvancedTabDirty(root, dirty) {
     root.find('#luker_rpg_memory_advanced_dirty_note').toggle(Boolean(dirty));
+    // The workbench's post-commit refresh reads this attribute to decide
+    // whether re-hydrating the Advanced form is safe: while the form holds
+    // unsaved edits, hydration would clobber the user's input with the
+    // re-derived effective settings.
+    root.attr('data-mg-advanced-dirty', dirty ? '1' : '0');
 }
 
 function applyAdvancedTabToLiveSettings(root, settings) {
@@ -15294,7 +15042,7 @@ function bindUi() {
         await openSchemaEditorPopup(context, settings, root);
     });
     root.find('#luker_rpg_memory_open_schema_studio').off('click').on('click', async function () {
-        await openSchemaIterationStudio({
+        await openConfigIterationStudio({
             context,
             settings,
             root,
@@ -15302,7 +15050,10 @@ function bindUi() {
             getEffectiveNodeTypeSchema,
             getEffectiveSettings,
             getSchemaScopeInfo,
+            getDefaultNodeTypeSchema,
             persistCharacterSchemaOverride,
+            persistCharacterAdvancedOverridePatch,
+            syncGenerationVisibleHistoryRuntimeRegexScripts,
             saveSettings,
             i18n,
             i18nFormat,
@@ -15313,6 +15064,15 @@ function bindUi() {
                 const nextScopeInfo = getSchemaScopeInfo(context, settings);
                 updateSchemaSummary(uiRoot, nextScopeInfo.schema);
                 updateSchemaScopeIndicator(uiRoot, nextScopeInfo);
+                // Re-hydrate the Advanced form so a workbench commit shows up
+                // in the panel without a reload — unless the form holds
+                // unsaved edits, in which case hydration would clobber them.
+                if (uiRoot.attr('data-mg-advanced-dirty') !== '1') {
+                    const advancedScopeInfo = getAdvancedScopeInfo(context, settings);
+                    hydrateAdvancedTabFields(uiRoot, advancedScopeInfo.settings);
+                    updateAdvancedScopeIndicator(uiRoot, advancedScopeInfo);
+                }
+                try { syncGenerationVisibleHistoryRuntimeRegexScripts(); } catch { /* host refresh errors surface elsewhere */ }
             },
         });
     });
@@ -15344,7 +15104,7 @@ function bindUi() {
         '#luker_rpg_memory_advanced_recall_route_prompt',
         '#luker_rpg_memory_advanced_recall_finalize_prompt',
         '#luker_rpg_memory_advanced_rag_rewrite_prompt',
-        '#luker_rpg_memory_advanced_schema_iter_system_prompt',
+        '#luker_rpg_memory_advanced_config_iter_system_prompt',
         '#luker_rpg_memory_advanced_graph_iter_system_prompt',
     ].join(', ');
     root.find(advancedFieldSelectors).off('input change').on('input change', function () {

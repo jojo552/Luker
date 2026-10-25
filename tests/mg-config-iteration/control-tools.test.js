@@ -1,4 +1,4 @@
-// tests/mg-schema-iteration/control-tools.test.js
+// tests/mg-config-iteration/control-tools.test.js
 //
 // Drift test for the MG schema control-tool surface. Pins down the two
 // reset control tools (reset_to_blank / reset_to_global) so a future refactor
@@ -8,28 +8,28 @@
 // none → stop).
 //
 // The actual reset behaviour (state.live mutation in onControlCall) is
-// closure-private inside `openSchemaIterationStudio`; full coverage
+// closure-private inside `openConfigIterationStudio`; full coverage
 // happens in a browser verify run. This drift test is the jest-reachable
 // safety net.
 
 import { jest } from '@jest/globals';
 
 // public/lib.js pulls in a browser bundle that can't be resolved under
-// jest. Mirror the workaround other mg-schema-iteration tests use.
+// jest. Mirror the workaround other mg-config-iteration tests use.
 jest.unstable_mockModule('../../public/lib.js', async () => {
     const { default: lodash } = await import('lodash');
     return { lodash };
 });
 
-let MG_SCHEMA_TOOL_DISPLAY;
+let MG_CONFIG_TOOL_DISPLAY;
 let CONTROL_TOOL_NAMES;
 
 beforeAll(async () => {
-    ({ MG_SCHEMA_TOOL_DISPLAY } = await import(
-        '../../public/scripts/extensions/memory-graph/schema-iteration/tool-display.js'
+    ({ MG_CONFIG_TOOL_DISPLAY } = await import(
+        '../../public/scripts/extensions/memory-graph/config-iteration/tool-display.js'
     ));
     ({ CONTROL_TOOL_NAMES } = await import(
-        '../../public/scripts/extensions/memory-graph/schema-iteration/tools.js'
+        '../../public/scripts/extensions/memory-graph/config-iteration/tools.js'
     ));
 });
 
@@ -42,14 +42,14 @@ describe('MG schema control tools', () => {
     });
 
     it('classifies both reset tools as control type in tool-display (no continue / finalize)', () => {
-        expect(MG_SCHEMA_TOOL_DISPLAY.luker_mg_schema_continue_iteration).toBeUndefined();
-        expect(MG_SCHEMA_TOOL_DISPLAY.luker_mg_schema_finalize_iteration).toBeUndefined();
-        expect(MG_SCHEMA_TOOL_DISPLAY.luker_mg_schema_reset_live_to_blank?.type).toBe('control');
-        expect(MG_SCHEMA_TOOL_DISPLAY.luker_mg_schema_reset_live_to_global?.type).toBe('control');
+        expect(MG_CONFIG_TOOL_DISPLAY.luker_mg_schema_continue_iteration).toBeUndefined();
+        expect(MG_CONFIG_TOOL_DISPLAY.luker_mg_schema_finalize_iteration).toBeUndefined();
+        expect(MG_CONFIG_TOOL_DISPLAY.luker_mg_schema_reset_live_to_blank?.type).toBe('control');
+        expect(MG_CONFIG_TOOL_DISPLAY.luker_mg_schema_reset_live_to_global?.type).toBe('control');
     });
 
     it('exposes exactly these 2 control tools (drift guard)', () => {
-        const controlNames = Object.entries(MG_SCHEMA_TOOL_DISPLAY)
+        const controlNames = Object.entries(MG_CONFIG_TOOL_DISPLAY)
             .filter(([, v]) => v?.type === 'control')
             .map(([k]) => k)
             .sort();
@@ -64,7 +64,7 @@ describe('MG schema control tools', () => {
             'luker_mg_schema_reset_live_to_blank',
             'luker_mg_schema_reset_live_to_global',
         ]) {
-            const entry = MG_SCHEMA_TOOL_DISPLAY[name];
+            const entry = MG_CONFIG_TOOL_DISPLAY[name];
             expect(entry?.icon).toBeTruthy();
             expect(entry?.label).toMatch(/[A-Za-z]/);
         }

@@ -2,7 +2,7 @@
 // Copyright (C) 2026 FunnyCups
 
 /**
- * Memory Graph Schema — AI iteration popup (plugin-owned).
+ * Memory Graph configuration — AI iteration popup (plugin-owned).
  *
  * Replacement for the legacy iteration-studio adapter (now removed).
  * Single-column chat surface that wires
@@ -11,6 +11,11 @@
  *   - runner   (`requestToolCallsWithRetry` from `lib/iter-tool-calling.js`)
  *   - render   (Markdown rendering for assistant messages)
  *   - edits    (`applyEdits` from `lib/edits/`)
+ *
+ * The working document is a configuration object `{ schema, settings }`:
+ * the node-type schema array plus the registry-backed settings view. All
+ * writes flow through the ProposalBus as sparse proposals — the AI never
+ * edits disk directly, the user approves every batch.
  *
  * Layout (Q10 N/A for MG — no reference picker, no mode):
  *
@@ -27,14 +32,15 @@
  * mid-conversation is safe.
  *
  * MG-distinctive piece — schema-array-diff (Q8):
- *   The three MG tools (set / remove / reorder node type) all go through the
- *   sandbox-diff pattern in tools.js, which emits a single coarse
- *   `set('', newSchema)` edit per tool call. The pending-edit card therefore
- *   renders an array-diff (added / removed / modified type ids) rather than
- *   the generic `<op> <path>` line that the other plugins use.
+ *   The three MG schema tools (set / remove / reorder node type) all go
+ *   through the sandbox-diff pattern in tools.js, which emits a single
+ *   coarse `set('', newDocument)` edit per tool call. The pending-edit card
+ *   therefore renders an array-diff (added / removed / modified type ids)
+ *   for the schema half plus a per-key listing for the settings half,
+ *   rather than the generic `<op> <path>` line the other plugins use.
  *
  * Entry point:
- *   `openSchemaIterationStudio(deps)`
+ *   `openConfigIterationStudio(deps)`
  *
  * Deps shape:
  *   - context                          SillyTavern context
@@ -43,12 +49,22 @@
  *   - normalizeNodeTypeSchema(input)   pure normalizer (primitives.js)
  *   - getEffectiveNodeTypeSchema(ctx, settings)
  *                                       reads schema; per-character override falls through to global
+ *   - getEffectiveSettings(ctx, settings)
+ *                                       reads the effective settings view (character override
+ *                                       merged over global)
  *   - getSchemaScopeInfo(ctx, settings)
  *                                       optional; returns { scope, hasOverride, characterName, ... }.
  *                                       Used to drive the appendScopeHintIfNeeded 3-path system-prompt
  *                                       hint and to gate the two reset control tools.
+ *   - getDefaultNodeTypeSchema()       code-default schema (primitives.js)
  *   - persistCharacterSchemaOverride(ctx, avatar, normalized)
- *                                       writes per-character override; returns ok/false
+ *                                       writes per-character schema override; returns ok/false
+ *   - persistCharacterAdvancedOverridePatch(ctx, avatar, patch)
+ *                                       writes the sparse per-character settings override
+ *                                       ({ set, unset }); returns ok/false
+ *   - syncGenerationVisibleHistoryRuntimeRegexScripts()
+ *                                       re-syncs the visible-message-window regex provider
+ *                                       after a settings commit
  *   - saveSettings()                   persists global settings
  *   - i18n, i18nFormat
  *   - refreshRootUi(uiRoot)            called after each commit to refresh parent UI
@@ -68,7 +84,6 @@ import {
     ui as ITER_UI,
     proposalBus as ITER_PROPOSAL_BUS,
 } from '../../../iteration-library/index.js';
-import { profileEdit } from '../../../iteration-library/proposal-bus/kinds/profile-edit.js';
 import { registerTarget } from '../../../iteration-library/storage/target-registry.js';
 import { mdLiteral } from '../../../iteration-library/markdown-escape.js';
 import {
@@ -76,12 +91,26 @@ import {
     normalizeToolCallToEdit,
     CONTROL_TOOL_NAMES,
     isMgSchemaControlCall,
+    isMgConfigReadTool,
+    READ_TOOL_NAMES,
 } from './tools.js';
-import { MG_SCHEMA_TOOL_DISPLAY } from './tool-display.js';
-import { DEFAULT_SCHEMA_ITER_SYSTEM_PROMPT } from './system-prompt.js';
+import { MG_CONFIG_TOOL_DISPLAY } from './tool-display.js';
+import { DEFAULT_CONFIG_ITER_SYSTEM_PROMPT } from './system-prompt.js';
 import { createMgSchemaSessionStore, makeMessageId, normalizeMessageShape } from './session-store.js';
 import { migrateMgSchemaSessionsV2ToSidecar } from './session-migration-v2-to-sidecar.js';
-import { dispatchMgSchemaReadFields } from './read-fields-dispatcher.js';
+import { dispatchMgConfigReadFields } from './read-fields-dispatcher.js';
+import {
+    CONFIG_FIELDS,
+    buildConfigFieldCatalog,
+    resolveSettingsForView,
+    getDefaultSettingsView,
+} from './fields.js';
+import {
+    ADVANCED_SETTING_DEFAULTS,
+    normalizeAdvancedSettings,
+} from './advanced-settings.js';
+import { planConfigCommit, applyConfigPlan } from './commit-plan.js';
+import { createConfigProfileEditKind } from './proposal-kind.js';
 import {
     isReplayableIterationMessage,
 } from '../../../iteration-library/iter-message-filter.js';
@@ -90,7 +119,7 @@ import {
     buildPayloadForOutcome,
 } from '../../../iteration-library/edit-tool-result-envelope.js';
 
-const MODULE = 'mg-schema-iteration';
+const MODULE = 'mg-config-iteration';
 const STYLESHEET_ID = 'mg_schema_it_studio_stylesheet';
 
 // Shared lorebook read tools (also used by orch iter-studio + CEA
@@ -102,37 +131,7 @@ async function runLorebookReadTool(call, avatar = '') {
     return runLorebookReadToolShared(call, { context: __ctx, avatar });
 }
 
-// MG schema iter-studio's read-fields tool. Lets the iterating AI pull
-// exact values from `state.live` (the schema array) by lodash-style
-// paths before proposing set / remove / reorder tool calls. Purely
-// inline-executed — the popup dispatches it synchronously and persists
-// the tool_result on the assistant message so the next round's
-// taskMessages replay carries it back to the model. See
-// read-fields-dispatcher.js for the sanitization-boundary call-out.
-const SCHEMA_READ_TOOL_NAME = 'mg_schema_read_fields';
-const SCHEMA_READ_TOOL_DEF = {
-    type: 'function',
-    function: {
-        name: SCHEMA_READ_TOOL_NAME,
-        description: 'Read exact values from the current live MG node-type schema by lodash-style paths. Read-only. The root is the schema array; common paths: "[N].id", "[N].label", "[N].tableColumns", "[N].tableColumns[K]", "[N].extractionInstructions", "[N].compression.mode", "length". Prefer specific indexed paths over reading the whole schema so the response stays focused.',
-        parameters: {
-            type: 'object',
-            properties: {
-                paths: {
-                    type: 'array',
-                    items: { type: 'string' },
-                    description: 'Lodash-style paths into the schema array.',
-                },
-            },
-            required: ['paths'],
-            additionalProperties: false,
-        },
-    },
-};
-function isSchemaReadTool(name) {
-    return String(name || '') === SCHEMA_READ_TOOL_NAME;
-}
-const STYLESHEET_HREF = '/scripts/extensions/memory-graph/schema-iteration/studio.css';
+const STYLESHEET_HREF = '/scripts/extensions/memory-graph/config-iteration/studio.css';
 const PROPOSAL_BUS_STYLESHEET_ID = 'mg_schema_it_proposal_bus_stylesheet';
 const PROPOSAL_BUS_STYLESHEET_HREF = '/scripts/iteration-library/proposal-bus/proposal-bus.css';
 
@@ -191,15 +190,15 @@ function isAbortError(err, signal) {
 // ──────────────────────────────────────────────────────────────────────────
 // Workspace preview-pane renderer + diff helpers (file-local).
 //
-// These run at module scope (not inside `openSchemaIterationStudio`) so unit
-// tests can import `_testOnly_renderMgSchemaPreviewPane` directly without
-// instantiating the popup. The renderer is pure: given `live` (schema array)
-// + pending edits, return preview HTML. Duplicated rather than extracted
-// because the other 4 popups (CPA / Orchestrator / CEA char / CEA editor)
-// each get their own copy.
+// These run at module scope (not inside `openConfigIterationStudio`) so unit
+// tests can import `_testOnly_renderMgConfigPreviewPane` directly without
+// instantiating the popup. The renderer is pure: given `live` (the
+// `{ schema, settings }` working config) + pending edits, return preview
+// HTML. Duplicated rather than extracted because the other 4 popups (CPA /
+// Orchestrator / CEA char / CEA editor) each get their own copy.
 //
 // MG sandbox-diff caveat: a single tool call produces one coarse
-// `set('', newSchema)` edit. `computeChangedPathSet` therefore returns
+// `set('', newConfig)` edit. `computeChangedPathSet` therefore returns
 // `Set([''])` for any non-empty edit batch; the renderer must fall back to
 // per-category JSON equality to figure out which row is actually changed.
 // ──────────────────────────────────────────────────────────────────────────
@@ -500,21 +499,28 @@ function truncateForPreview(str, max = 200) {
 }
 
 /**
- * Render the right-pane HTML for the MG schema workspace preview. Pure
- * function. Tolerates both the unit-test fixture shape (`name`, `fields[]`
- * objects) and the real production shape (`label`, `tableColumns[]` strings)
- * — the latter is what `normalizeNodeTypeSchema` actually emits.
+ * Render the right-pane HTML for the MG configuration workspace preview.
+ * Pure function. `live` is the `{ schema, settings }` working document.
+ * The schema block reuses the original array rendering on `live.schema`
+ * (tolerates both the unit-test fixture shape with `name`/`fields[]` and
+ * the production shape `label`/`tableColumns[]` that
+ * `normalizeNodeTypeSchema` emits); the settings block lists the registry
+ * keys the pending edits touch, with short text previews.
  *
- * @param {Array|null} live         The current schema array, or null.
- * @param {Array} pendingEdits      Edits from the latest LLM round.
- * @param {Function} [tFn]          Optional i18n function (string → string).
+ * @param {{schema?: any[], settings?: object}|null} live
+ *                                        The current working config, or null.
+ * @param {Array} pendingEdits           Edits from the latest LLM round
+ *                                       (empty-path sets whose newValue is
+ *                                       the next config document).
+ * @param {Function} [tFn]               Optional i18n function (string → string).
  * @returns {string} HTML.
  */
-function renderMgSchemaPreviewPane(live, pendingEdits, tFn) {
+function renderMgConfigPreviewPane(live, pendingEdits, tFn) {
     const t = typeof tFn === 'function' ? tFn : (s) => String(s ?? '');
-    if (!live || (Array.isArray(live) && live.length === 0)) {
-        return `<div class="luker-iter-workspace-preview-empty">${escapeHtmlLocal(t('No schema loaded.'))}</div>`;
-    }
+    const schema = Array.isArray(live?.schema) ? live.schema : [];
+    const settings = live?.settings && typeof live.settings === 'object' && !Array.isArray(live.settings)
+        ? live.settings
+        : {};
     const edits = Array.isArray(pendingEdits) ? pendingEdits : [];
     const changed = computeChangedPathSet(live, edits);
     let next = live;
@@ -533,78 +539,241 @@ function renderMgSchemaPreviewPane(live, pendingEdits, tFn) {
             }
         } catch { /* fall back to live */ }
     }
+    const nextSchema = Array.isArray(next?.schema) ? next.schema : [];
+    const nextSettings = next?.settings && typeof next.settings === 'object' && !Array.isArray(next.settings)
+        ? next.settings
+        : settings;
 
-    const categories = Array.isArray(live) ? live : [];
-    // For MG sandbox-diff: any change marks the whole schema dirty;
-    // also do a per-category JSON-equality check against `next`.
-    function categoryChanged(cat, idx) {
-        if (changed.size === 0) return false;
-        if (!changed.has('')) {
-            // Granular diff was emitted — defer to it.
-            // Any path starting with the category index counts.
-            for (const p of changed) {
-                if (p === '' || p === String(idx) || p.startsWith(`${idx}.`)) return true;
+    // ── schema half — original array rendering on live.schema ─────────
+    let schemaBlock;
+    if (schema.length === 0) {
+        schemaBlock = `<div class="luker-iter-workspace-preview-empty">${escapeHtmlLocal(t('No schema loaded.'))}</div>`;
+    } else {
+        // For MG sandbox-diff: any change marks the whole schema dirty;
+        // also do a per-category JSON-equality check against `next`.
+        // Paths from the config-rooted walkDiff carry a `schema.` prefix —
+        // strip it before matching against the category index.
+        function categoryChanged(cat, idx) {
+            if (changed.size === 0) return false;
+            if (!changed.has('')) {
+                // Granular diff was emitted — defer to it.
+                // Any path starting with the category index counts.
+                for (const p of changed) {
+                    if (!p.startsWith('schema.')) continue;
+                    const rel = p.slice('schema.'.length);
+                    if (rel === String(idx) || rel.startsWith(`${idx}.`)) return true;
+                }
+                return false;
             }
-            return false;
-        }
-        // Coarse sandbox-diff: compare this category against the corresponding
-        // slot in `next` (matched by id when possible, else by index).
-        let nextCat = null;
-        if (Array.isArray(next)) {
+            // Coarse sandbox-diff: compare this category against the
+            // corresponding slot in `next.schema` (matched by id when
+            // possible, else by index).
+            let nextCat = null;
             const id = cat?.id;
             if (id) {
-                nextCat = next.find(c => c?.id === id) || null;
+                nextCat = nextSchema.find(c => c?.id === id) || null;
             }
             if (!nextCat) {
-                nextCat = next[idx] || null;
+                nextCat = nextSchema[idx] || null;
             }
+            try { return JSON.stringify(cat) !== JSON.stringify(nextCat); } catch { return true; }
         }
-        try { return JSON.stringify(cat) !== JSON.stringify(nextCat); } catch { return true; }
-    }
 
-    function fieldEntries(cat) {
-        if (Array.isArray(cat?.fields)) return cat.fields;
-        if (Array.isArray(cat?.tableColumns)) {
-            return cat.tableColumns.map((col) => ({
-                id: col,
-                label: col,
-                type: 'string',
-                description: '',
-            }));
+        function fieldEntries(cat) {
+            if (Array.isArray(cat?.fields)) return cat.fields;
+            if (Array.isArray(cat?.tableColumns)) {
+                return cat.tableColumns.map((col) => ({
+                    id: col,
+                    label: col,
+                    type: 'string',
+                    description: '',
+                }));
+            }
+            return [];
         }
-        return [];
-    }
 
-    const catBlocks = categories.slice(0, 50).map((cat, idx) => {
-        const isChanged = categoryChanged(cat, idx);
-        const cls = isChanged
-            ? 'luker-iter-workspace-preview-row pending-change'
-            : 'luker-iter-workspace-preview-row';
-        const fields = fieldEntries(cat);
-        const fieldRows = fields.slice(0, 30).map((f) => {
-            const fid = typeof f === 'string' ? f : (f?.id || '');
-            const label = typeof f === 'string' ? f : (f?.label || '');
-            const type = typeof f === 'string' ? 'string' : (f?.type || '');
-            const desc = truncateForPreview(typeof f === 'string' ? '' : (f?.description || ''), 80);
-            return `<div class="luker-iter-workspace-preview-row-body" style="margin:2px 0 2px 12px;">${escapeHtmlLocal(fid)} <span class="luker-iter-workspace-preview-row-meta">[${escapeHtmlLocal(type)}]</span> - ${escapeHtmlLocal(label)}${desc ? `<br><span class="luker-iter-workspace-preview-row-meta">${escapeHtmlLocal(desc)}</span>` : ''}</div>`;
+        const catBlocks = schema.slice(0, 50).map((cat, idx) => {
+            const isChanged = categoryChanged(cat, idx);
+            const cls = isChanged
+                ? 'luker-iter-workspace-preview-row pending-change'
+                : 'luker-iter-workspace-preview-row';
+            const fields = fieldEntries(cat);
+            const fieldRows = fields.slice(0, 30).map((f) => {
+                const fid = typeof f === 'string' ? f : (f?.id || '');
+                const label = typeof f === 'string' ? f : (f?.label || '');
+                const type = typeof f === 'string' ? 'string' : (f?.type || '');
+                const desc = truncateForPreview(typeof f === 'string' ? '' : (f?.description || ''), 80);
+                return `<div class="luker-iter-workspace-preview-row-body" style="margin:2px 0 2px 12px;">${escapeHtmlLocal(fid)} <span class="luker-iter-workspace-preview-row-meta">[${escapeHtmlLocal(type)}]</span> - ${escapeHtmlLocal(label)}${desc ? `<br><span class="luker-iter-workspace-preview-row-meta">${escapeHtmlLocal(desc)}</span>` : ''}</div>`;
+            }).join('');
+            const catName = cat?.name || cat?.label || cat?.id || '?';
+            const fieldCount = fields.length;
+            const fieldsTpl = t('${0} fields');
+            const fieldsLabel = String(fieldsTpl).replace(/\$\{(\d+)\}/g, (_, i) => Number(i) === 0 ? String(fieldCount) : '');
+            return `<details class="${cls}"${idx < 5 ? ' open' : ''}><summary><span class="luker-iter-workspace-preview-row-label">${escapeHtmlLocal(catName)}</span> <span class="luker-iter-workspace-preview-row-meta">${escapeHtmlLocal(fieldsLabel)}</span></summary>${fieldRows}</details>`;
         }).join('');
-        const catName = cat?.name || cat?.label || cat?.id || '?';
-        const fieldCount = fields.length;
-        const fieldsTpl = t('${0} fields');
-        const fieldsLabel = String(fieldsTpl).replace(/\$\{(\d+)\}/g, (_, i) => Number(i) === 0 ? String(fieldCount) : '');
-        return `<details class="${cls}"${idx < 5 ? ' open' : ''}><summary><span class="luker-iter-workspace-preview-row-label">${escapeHtmlLocal(catName)}</span> <span class="luker-iter-workspace-preview-row-meta">${escapeHtmlLocal(fieldsLabel)}</span></summary>${fieldRows}</details>`;
-    }).join('');
+
+        schemaBlock = catBlocks;
+    }
+
+    // ── settings half — registry keys the pending edits touch ──────────
+    const changedSettingDefs = Object.values(CONFIG_FIELDS)
+        .filter(def => changed.has(`settings.${def.key}`));
+    let settingsBlock = '';
+    if (changedSettingDefs.length > 0) {
+        const rows = changedSettingDefs.map((def) => {
+            const value = nextSettings[def.key];
+            const preview = def.kind === 'text'
+                ? truncateForPreview(String(value ?? ''), 200)
+                : JSON.stringify(value ?? null);
+            return `<div class="luker-iter-workspace-preview-row pending-change"><span class="luker-iter-workspace-preview-row-label">${escapeHtmlLocal(t(def.label))}</span> <span class="luker-iter-workspace-preview-row-meta">${escapeHtmlLocal(preview)}</span></div>`;
+        }).join('');
+        settingsBlock = `
+        <div class="luker-iter-workspace-preview-section">
+            <div class="luker-iter-workspace-preview-section-title">${escapeHtmlLocal(t('Settings'))}</div>
+            ${rows}
+        </div>`;
+    }
 
     return `
         <div class="luker-iter-workspace-preview-section">
             <div class="luker-iter-workspace-preview-section-title">${escapeHtmlLocal(t('Schema'))}</div>
-            ${catBlocks}
+            ${schemaBlock}
         </div>
+        ${settingsBlock}
     `;
 }
 
+/**
+ * i18n-format fallback used when no translator is threaded in (module-
+ * scope renderer defaults): substitutes `${0}`-style placeholders with the
+ * positional arguments, matching the popup's `i18nFormat` contract.
+ */
+function fallbackI18nFormat(s, ...vals) {
+    return String(s ?? '').replace(/\$\{(\d+)\}/g, (_m, n) => String(vals[Number(n)] ?? ''));
+}
+
+/**
+ * Schema-array diff body — the legacy half of the configuration diff
+ * card. Compares the two schema arrays by node-type id and synthesizes
+ * empty-path / path-keyed set edits so the shared
+ * `iteration-library/ui/diff.renderDiffCard` fires per-changed-leaf cards
+ * instead of one giant stringified diff.
+ *
+ * Returns '' when the two arrays carry no effective change — the caller
+ * (renderConfigPendingCards) decides whether the overall card still has
+ * anything to show.
+ *
+ * Module-scope so the popup closure threads its live `t` / `tf` in and
+ * unit tests can exercise the rendering without instantiating the popup.
+ */
+function renderSchemaArrayPendingCards(before, after, tFn, tfFn) {
+    const tf = typeof tfFn === 'function' ? tfFn : fallbackI18nFormat;
+    const beforeIds = new Map((Array.isArray(before) ? before : []).map(x => [String(x?.id || ''), x]));
+    const afterIds = new Map((Array.isArray(after) ? after : []).map(x => [String(x?.id || ''), x]));
+    const added = [...afterIds.keys()].filter(id => id && !beforeIds.has(id));
+    const removed = [...beforeIds.keys()].filter(id => id && !afterIds.has(id));
+    const modified = [...afterIds.keys()].filter(id => {
+        if (!id || !beforeIds.has(id)) return false;
+        // Stable stringify is overkill here — both sides come from the
+        // same normalizer (tools.js calls normalizeNodeTypeSchema before
+        // emitting the edit), so key order matches.
+        return JSON.stringify(beforeIds.get(id)) !== JSON.stringify(afterIds.get(id));
+    });
+
+    const syntheticEdits = [];
+    const fieldLabels = {};
+    // Modified: empty-path set on the two node-type objects → triggers
+    // the shared component's walkDiff → one sub-card per changed leaf.
+    for (const id of modified) {
+        syntheticEdits.push({
+            op: 'set',
+            path: '',
+            oldValue: beforeIds.get(id),
+            newValue: afterIds.get(id),
+        });
+    }
+    // Added / removed: synthesize a path-keyed set so renderDiffCard
+    // takes the non-empty-path branch and labels the card by node-type
+    // id. Empty-path with one side missing wouldn't trigger per-leaf
+    // splitting anyway (the && short-circuits on the missing value), so
+    // a single-card render is cleaner than firing a malformed diff. The
+    // raw `nodeTypeSchema.<id>` path leaks the storage-internal key into
+    // the UI, so a fieldLabels override maps it back to just the id so
+    // the shared humanizePath renders "Field updated: <id>".
+    for (const id of added) {
+        const path = `nodeTypeSchema.${id}`;
+        fieldLabels[path] = id;
+        syntheticEdits.push({
+            op: 'set',
+            path,
+            oldValue: undefined,
+            newValue: afterIds.get(id),
+        });
+    }
+    for (const id of removed) {
+        const path = `nodeTypeSchema.${id}`;
+        fieldLabels[path] = id;
+        syntheticEdits.push({
+            op: 'set',
+            path,
+            oldValue: beforeIds.get(id),
+            newValue: undefined,
+        });
+    }
+    if (syntheticEdits.length === 0) {
+        return '';
+    }
+    return ITER_UI.diff.renderDiffCard(syntheticEdits, { i18n: tf, fieldLabels });
+}
+
+/**
+ * Configuration diff body for a `{ schema, settings }` proposal pair.
+ * Two sections:
+ *   - "Schema changes"  — only when the schema content differs; reuses
+ *     renderSchemaArrayPendingCards on the two schema halves.
+ *   - "Settings changes" — registry keys whose value changed, one row per
+ *     key with a short before → after preview (text values truncate).
+ * Falls back to the "(no effective change)" note when neither half moved.
+ *
+ * Tolerates `before: null` (legacy proposals carry no pre-edit snapshot);
+ * a missing half simply renders as all-added / all-changed.
+ */
+function renderConfigPendingCards(before, after, tFn, tfFn) {
+    const t = typeof tFn === 'function' ? tFn : (s) => String(s ?? '');
+    const beforeSettings = before?.settings && typeof before.settings === 'object' && !Array.isArray(before.settings)
+        ? before.settings
+        : {};
+    const afterSettings = after?.settings && typeof after.settings === 'object' && !Array.isArray(after.settings)
+        ? after.settings
+        : {};
+    const parts = [];
+
+    const schemaCards = renderSchemaArrayPendingCards(before?.schema, after?.schema, tFn, tfFn);
+    if (schemaCards) {
+        parts.push(`<div class="mg_schema_it_pending_section"><div class="mg_schema_it_pending_section_title">${escapeHtmlLocal(t('Schema changes'))}</div>${schemaCards}</div>`);
+    }
+
+    const changedDefs = Object.values(CONFIG_FIELDS)
+        .filter(def => !Object.is(beforeSettings[def.key], afterSettings[def.key]));
+    if (changedDefs.length > 0) {
+        const rows = changedDefs.map((def) => {
+            const format = (v) => def.kind === 'text'
+                ? truncateForPreview(String(v ?? ''), 160)
+                : JSON.stringify(v ?? null);
+            return `<div class="mg_schema_it_pending_row"><span class="mg_schema_it_pending_row_label">${escapeHtmlLocal(t(def.label))}</span> <span class="diff_old">${escapeHtmlLocal(format(beforeSettings[def.key]))}</span><span class="diff_arrow">→</span> <span class="diff_new">${escapeHtmlLocal(format(afterSettings[def.key]))}</span></div>`;
+        }).join('');
+        parts.push(`<div class="mg_schema_it_pending_section"><div class="mg_schema_it_pending_section_title">${escapeHtmlLocal(t('Settings changes'))}</div><div class="mg_schema_it_pending_card">${rows}</div></div>`);
+    }
+
+    if (parts.length === 0) {
+        return `<div class="mg_schema_it_pending_card"><div class="mg_schema_it_pending_note">${escapeHtmlLocal(t('(no effective change)'))}</div></div>`;
+    }
+    return parts.join('');
+}
+
 export {
-    renderMgSchemaPreviewPane as _testOnly_renderMgSchemaPreviewPane,
+    renderMgConfigPreviewPane as _testOnly_renderMgConfigPreviewPane,
+    renderConfigPendingCards as _testOnly_renderConfigPendingCards,
     applyEmptyPathSet as _testOnly_applyEmptyPathSet,
     createNewSession as _testOnly_createNewSession,
 };
@@ -695,16 +864,16 @@ function buildPopupHtml({
 }
 
 /**
- * Open the Memory Graph schema AI iteration popup.
+ * Open the Memory Graph configuration AI iteration popup.
  *
  * Resolves when the user dismisses the dialog. Sessions are persisted eagerly
  * on every mutation so dismiss-without-save is irrelevant.
  *
  * @param {object} deps See module header for shape.
  */
-export async function openSchemaIterationStudio(deps) {
+export async function openConfigIterationStudio(deps) {
     if (!deps || typeof deps !== 'object') {
-        throw new TypeError('openSchemaIterationStudio: deps is required');
+        throw new TypeError('openConfigIterationStudio: deps is required');
     }
     const {
         context,
@@ -714,7 +883,10 @@ export async function openSchemaIterationStudio(deps) {
         getEffectiveNodeTypeSchema,
         getEffectiveSettings,
         getSchemaScopeInfo,
+        getDefaultNodeTypeSchema,
         persistCharacterSchemaOverride,
+        persistCharacterAdvancedOverridePatch,
+        syncGenerationVisibleHistoryRuntimeRegexScripts,
         saveSettings,
         i18n,
         i18nFormat,
@@ -722,19 +894,34 @@ export async function openSchemaIterationStudio(deps) {
     } = deps;
 
     if (typeof normalizeNodeTypeSchema !== 'function') {
-        throw new TypeError('openSchemaIterationStudio: deps.normalizeNodeTypeSchema is required');
+        throw new TypeError('openConfigIterationStudio: deps.normalizeNodeTypeSchema is required');
     }
     if (typeof getEffectiveNodeTypeSchema !== 'function') {
-        throw new TypeError('openSchemaIterationStudio: deps.getEffectiveNodeTypeSchema is required');
+        throw new TypeError('openConfigIterationStudio: deps.getEffectiveNodeTypeSchema is required');
+    }
+    if (typeof getEffectiveSettings !== 'function') {
+        throw new TypeError('openConfigIterationStudio: deps.getEffectiveSettings is required');
+    }
+    if (typeof getDefaultNodeTypeSchema !== 'function') {
+        throw new TypeError('openConfigIterationStudio: deps.getDefaultNodeTypeSchema is required');
+    }
+    if (typeof persistCharacterSchemaOverride !== 'function') {
+        throw new TypeError('openConfigIterationStudio: deps.persistCharacterSchemaOverride is required');
+    }
+    if (typeof persistCharacterAdvancedOverridePatch !== 'function') {
+        throw new TypeError('openConfigIterationStudio: deps.persistCharacterAdvancedOverridePatch is required');
+    }
+    if (typeof syncGenerationVisibleHistoryRuntimeRegexScripts !== 'function') {
+        throw new TypeError('openConfigIterationStudio: deps.syncGenerationVisibleHistoryRuntimeRegexScripts is required');
     }
     if (typeof saveSettings !== 'function') {
-        throw new TypeError('openSchemaIterationStudio: deps.saveSettings is required');
+        throw new TypeError('openConfigIterationStudio: deps.saveSettings is required');
     }
 
     const t = typeof i18n === 'function' ? i18n : (s) => String(s ?? '');
     const tf = typeof i18nFormat === 'function'
         ? i18nFormat
-        : (s, ...vals) => String(s ?? '').replace(/\$\{(\d+)\}/g, (_m, n) => String(vals[Number(n)] ?? ''));
+        : fallbackI18nFormat;
 
     // Inject the popup stylesheet on first open. Idempotent; subsequent
     // calls are no-ops because the <link> element is id-keyed.
@@ -784,7 +971,7 @@ export async function openSchemaIterationStudio(deps) {
         });
     } catch (err) {
         // eslint-disable-next-line no-console
-        console.warn('[memory-graph schema-iteration] V2-to-sidecar migration threw, continuing', err);
+        console.warn('[memory-graph config-iteration] V2-to-sidecar migration threw, continuing', err);
     }
     await sessionStore.clearObsolete();
 
@@ -793,14 +980,16 @@ export async function openSchemaIterationStudio(deps) {
     await ITER_RENDER.ensureMarkdownDeps();
 
     // ──────────────────────────────────────────────────────────────────
-    // Closure-local state. `live` is the schema array (not an object like
-    // CEA Character's card+lorebook); the MG sandbox-diff pattern operates
-    // on it directly. Pending writes are owned by the ProposalBus mounted
-    // below — `state.pendingEdits` is no longer a separate cache.
+    // Closure-local state. `live` is the working configuration document
+    // `{ schema, settings }` — the normalized schema array plus the
+    // registry-resolved settings view. The MG sandbox-diff pattern
+    // operates on it directly. Pending writes are owned by the
+    // ProposalBus mounted below — `state.pendingEdits` is no longer a
+    // separate cache.
     // ──────────────────────────────────────────────────────────────────
     const state = {
         session: createNewSession(),
-        live: [],
+        live: { schema: [], settings: {} },
         isBusy: false,
         aborting: false,
         abortController: null,
@@ -810,12 +999,19 @@ export async function openSchemaIterationStudio(deps) {
     // ProposalBus. Owns the per-popup queue of write proposals (status,
     // gate predicate, click delegation, persistence). For MG the only kind
     // is `profile-edit`: each AI turn collapses its 1-or-N chained empty-
-    // path-set edits into ONE proposal carrying the final newSchema as
-    // op.newValue and the live schema captured at turn start as snapshot.
+    // path-set edits into ONE proposal carrying the final next-config as
+    // op.newValue and the live config captured at turn start as snapshot.
     //
-    // commitLive: applyEmptyPathSet over state.live then flush to disk
-    //   via commitLiveToSchema. Defined as a closure here so the kind
-    //   handler stays agnostic to MG's persistence path.
+    // TWO targets are registered:
+    //   - `config` — every new proposal; before/after are { schema, settings }
+    //     documents and the write goes through commitLiveToConfig.
+    //   - `schema` — the legacy array target. Old persisted sessions (plus
+    //     the legacy pendingEdits migration in loadSession) carry
+    //     { type: 'schema' } entries with array before/after; keeping the
+    //     target dispatchable lets approve / reject / rollback still work
+    //     when such a session is resumed. Its write wraps the array back
+    //     into a config document (settings pass through untouched).
+    //
     // readLive: re-read disk via loadLive + return the current state.live.
     //
     // Auto-approve mirrors the legacy surfaceState.autoApply checkbox.
@@ -832,29 +1028,36 @@ export async function openSchemaIterationStudio(deps) {
             scheduleBusRender();
         },
     });
-    registerTarget('schema', {
+    registerTarget('config', {
         read: async () => {
             await loadLive();
             return structuredClone(state.live);
         },
         write: async (_target, next) => {
+            const before = structuredClone(state.live);
+            await commitLiveToConfig(before, next);
             state.live = structuredClone(next);
-            await commitLiveToSchema();
+        },
+        describe: () => 'configuration',
+    });
+    registerTarget('schema', {
+        read: async () => {
+            await loadLive();
+            return structuredClone(state.live.schema);
+        },
+        write: async (_target, nextSchema) => {
+            const before = structuredClone(state.live);
+            const next = { ...before, schema: normalizeNodeTypeSchema(nextSchema) };
+            await commitLiveToConfig(before, next);
+            state.live = next;
         },
         describe: () => 'schema',
     });
-    bus.registerKind('profile-edit', {
-        ...profileEdit,
-        targetType: 'schema',
-        renderDiffCard: (entry, _helpers) => {
-            const before = entry?.meta?.before ?? null;
-            const after = entry?.meta?.after ?? null;
-            return renderSchemaArrayPendingCards(before, after);
-        },
-        label: () => t('Schema change'),
-        icon: () => '🧩',
-        target: () => t('schema'),
-    });
+    bus.registerKind('profile-edit', createConfigProfileEditKind({
+        t,
+        renderSchemaCards: (before, after) => renderSchemaArrayPendingCards(before, after, t, tf),
+        renderConfigCards: (before, after) => renderConfigPendingCards(before, after, t, tf),
+    }));
     bus.setMessageResolver((messageId) => {
         const msgs = state.session?.messages || [];
         const m = msgs.find((x) => String(x?.id || '') === String(messageId));
@@ -1102,17 +1305,27 @@ export async function openSchemaIterationStudio(deps) {
     // next sandbox-diff's `oldValue` capture.
     // ──────────────────────────────────────────────────────────────────
     async function loadLive() {
-        const effective = getEffectiveNodeTypeSchema(context, settings);
-        state.live = normalizeNodeTypeSchema(effective);
+        const effectiveSchema = getEffectiveNodeTypeSchema(context, settings);
+        const effectiveSettings = getEffectiveSettings(context, settings) || settings;
+        state.live = {
+            schema: normalizeNodeTypeSchema(effectiveSchema),
+            settings: resolveSettingsForView(effectiveSettings),
+        };
     }
 
     // ──────────────────────────────────────────────────────────────────
     // Per-turn snapshot. `runIterationTurn` calls this once at the top so
-    // every helper that follows (system-prompt scope hint, augmented user
-    // prompt, control-tool handlers) reads the SAME view of scope / global
-    // schema / character override even if the user swaps a card or edits
-    // global settings mid-turn. Helpers that previously re-derived these
-    // from context/settings now accept this snapshot as a parameter.
+    // every helper that follows (system-prompt scope hint, read-tool
+    // dispatch, control-tool handlers, unset baselines) reads the SAME
+    // view of scope / global config / character override even if the user
+    // swaps a card or edits global settings mid-turn. Helpers that
+    // previously re-derived these from context/settings now accept this
+    // snapshot as a parameter.
+    //
+    // `commitLiveToConfig` re-captures a FRESH snapshot at commit time —
+    // the bus write may happen long after the proposal, and the inherited
+    // baselines must reflect the current global/default state, not the
+    // state as it was when the turn started.
     // ──────────────────────────────────────────────────────────────────
     function captureTurnSnapshot() {
         const avatar = String(context?.characters?.[context?.characterId]?.avatar || '').trim();
@@ -1121,40 +1334,39 @@ export async function openSchemaIterationStudio(deps) {
             : '';
         const helperSession = buildHelperSession();
         const globalSchema = normalizeNodeTypeSchema(settings?.nodeTypeSchema || []);
-        const effectiveSettings = typeof getEffectiveSettings === 'function'
-            ? (getEffectiveSettings(context, settings) || settings)
-            : settings;
-        const schemaIterSystemPrompt = String(effectiveSettings?.schemaIterSystemPrompt || '').trim()
-            || DEFAULT_SCHEMA_ITER_SYSTEM_PROMPT;
+        const defaultSchema = normalizeNodeTypeSchema(getDefaultNodeTypeSchema());
+        const globalSettings = resolveSettingsForView(normalizeAdvancedSettings(settings, ADVANCED_SETTING_DEFAULTS));
+        const defaultSettings = getDefaultSettingsView();
+        const effectiveView = resolveSettingsForView(getEffectiveSettings(context, settings) || settings);
+        const configIterSystemPrompt = String(effectiveView?.configIterSystemPrompt || '').trim()
+            || DEFAULT_CONFIG_ITER_SYSTEM_PROMPT;
         return {
             avatar,
             characterName,
             sourceScope: avatar ? 'character' : 'global',
             helperSession,
-            globalSchema,
-            schemaIterSystemPrompt,
+            globalConfig: { schema: globalSchema, settings: globalSettings },
+            defaultConfig: { schema: defaultSchema, settings: defaultSettings },
+            configIterSystemPrompt,
         };
     }
 
     // ──────────────────────────────────────────────────────────────────
     // Tool catalog assembly. The static catalog from `tools.js`
-    // (`buildToolCatalog`) covers schema edits + the two reset control
-    // tools. `mg_schema_read_fields` is always available (it reads the
-    // in-memory `state.live` schema and does not depend on any character
-    // binding). The lorebook read tools are character-scoped — they
-    // dispatch through the CEA helper API which is per-character, so we
-    // splice them in only when scope is `character` AND an avatar is
-    // selected. Without an avatar `helperApis` would be empty and every
-    // read would return a "no character bound" error, so silently hiding
-    // the tools is clearer than offering them in global scope.
+    // (`buildToolCatalog`) covers the configuration read / patch / set
+    // tools, the schema structure tools, and the two schema-reset control
+    // tools. The lorebook read tools are character-scoped — they dispatch
+    // through the CEA helper API which is per-character, so we splice them
+    // in only when scope is `character` AND an avatar is selected. Without
+    // an avatar `helperApis` would be empty and every read would return a
+    // "no character bound" error, so silently hiding the tools is clearer
+    // than offering them in global scope.
     // ──────────────────────────────────────────────────────────────────
     function buildCatalogForScope(turnSnapshot) {
-        const base = buildToolCatalog();
-        const withSchemaRead = [...base, SCHEMA_READ_TOOL_DEF];
         if (turnSnapshot?.helperSession?.scope === 'character' && turnSnapshot?.avatar) {
-            return [...withSchemaRead, ...LOREBOOK_READ_TOOL_DEFS];
+            return [...buildToolCatalog(), ...LOREBOOK_READ_TOOL_DEFS];
         }
-        return withSchemaRead;
+        return buildToolCatalog();
     }
 
     // ──────────────────────────────────────────────────────────────────
@@ -1213,12 +1425,13 @@ export async function openSchemaIterationStudio(deps) {
                 basePrompt,
                 '',
                 '# Iteration scope',
-                `You are iterating on the character schema for "${display}". This card has NO schema override yet.`,
+                `You are iterating on the character configuration for "${display}". This card has NO schema override yet.`,
                 '',
                 'Two paths exist; decide from the user\'s first message which applies:',
                 '- Adjust the existing setup: the working schema starts as a copy of the GLOBAL schema. Make targeted edits as you normally would. This is the default path.',
                 `- Author from scratch: call \`${CONTROL_TOOL_NAMES.resetToBlank}\` once to discard the global copy and start with a minimal blank shell. If you already called it earlier this session, the working schema is already blank — continue authoring from there without calling reset again.`,
                 '',
+                'Parameter and prompt writes are sparse character overrides — only keys differing from global are stored. Resets affect the schema only.',
                 'Do not call the reset tool unless the user clearly wants a brand-new schema.',
             ].join('\n');
         }
@@ -1226,37 +1439,55 @@ export async function openSchemaIterationStudio(deps) {
             basePrompt,
             '',
             '# Iteration scope',
-            `You are iterating on the character schema for "${display}". This card ALREADY has a schema override.`,
+            `You are iterating on the character configuration for "${display}". This card ALREADY has a schema override.`,
             '',
             'Three paths exist; default to the first unless the user clearly asks for one of the others:',
             '- Continue adjusting the current override: the working schema starts as a copy of the existing OVERRIDE. Make targeted edits as you normally would. This is the default path.',
             `- Author from scratch: call \`${CONTROL_TOOL_NAMES.resetToBlank}\` once to discard the existing override and start with a minimal blank shell. If you already called it earlier this session, the working schema is already blank — continue authoring from there without calling reset again.`,
             `- Match the global schema: call \`${CONTROL_TOOL_NAMES.resetToGlobal}\` once to discard the existing override and start with a fresh clone of the current global schema. If you already called it earlier this session, the working schema already matches global — continue adjusting from there without calling reset again.`,
             '',
+            'Parameter and prompt writes are sparse character overrides — only keys differing from global are stored. Resets affect the schema only.',
             'Do not call either reset tool unless the user clearly asks for that fresh-start path.',
         ].join('\n');
     }
 
     // ──────────────────────────────────────────────────────────────────
-    // Commit live → MG settings: when a character is active, write to
-    // the per-character override path; else
-    // fall through to global. After commit, deps.refreshRootUi refreshes
-    // the schema summary / scope indicator in the host UI.
+    // Commit live config → MG stores. Scope follows the old rule: a fresh
+    // read of the active avatar decides character vs global. In character
+    // scope the settings half is written as a SPARSE override patch
+    // (only changed keys, dropped keys unset), and a rejected write makes
+    // applyConfigPlan throw — the bus parks the entry in `conflict`; the
+    // commit never falls through to the global store. In global scope the
+    // plan's set keys are written onto the settings root, unset keys are
+    // deleted, and one save persists everything.
+    //
+    // The inherited baseline is captured from a FRESH turn snapshot at
+    // commit time (the bus write can land long after the proposal), so
+    // `unset` decisions reflect the current global/default values, not
+    // stale propose-time ones.
+    //
+    // After commit: refreshRootUi refreshes the schema summary / scope
+    // indicator in the host UI, and the visible-message-window regex
+    // provider is re-synced because a settings write can move
+    // llmVisibleRecentMessages.
     // ──────────────────────────────────────────────────────────────────
-    async function commitLiveToSchema() {
-        const normalized = normalizeNodeTypeSchema(state.live);
+    async function commitLiveToConfig(before, next) {
         const avatar = String(context?.characters?.[context?.characterId]?.avatar || '').trim();
-        if (avatar && typeof persistCharacterSchemaOverride === 'function') {
-            const ok = await persistCharacterSchemaOverride(context, avatar, normalized);
-            if (ok) {
-                try { refreshRootUi?.(root); } catch { /* host UI refresh errors surface elsewhere */ }
-                return;
-            }
-            // Fall through to global if the override write was rejected.
-        }
-        settings.nodeTypeSchema = normalized;
-        await saveSettings();
-        try { refreshRootUi?.(root); } catch { /* ignore */ }
+        const scope = avatar ? 'character' : 'global';
+        const turnSnapshot = captureTurnSnapshot();
+        const inheritedSettings = scope === 'character'
+            ? turnSnapshot.globalConfig.settings
+            : turnSnapshot.defaultConfig.settings;
+        const plan = planConfigCommit({ before, next, scope, inheritedSettings });
+        await applyConfigPlan(plan, {
+            scope,
+            globalSettings: settings,
+            persistCharacterSchema: (schema) => persistCharacterSchemaOverride(context, avatar, schema),
+            persistCharacterSettings: (patch) => persistCharacterAdvancedOverridePatch(context, avatar, patch),
+            saveGlobalSettings: saveSettings,
+        });
+        try { refreshRootUi?.(root); } catch { /* host UI refresh errors surface elsewhere */ }
+        try { syncGenerationVisibleHistoryRuntimeRegexScripts(); } catch { /* host regex sync errors surface elsewhere */ }
     }
 
     // ──────────────────────────────────────────────────────────────────
@@ -1398,88 +1629,13 @@ export async function openSchemaIterationStudio(deps) {
         await startNewSession();
     }
 
-    // ──────────────────────────────────────────────────────────────────
-    // Schema-array diff renderer — pending edit cards.
-    //
-    // MG tools all go through the sandbox-diff pattern, which means a tool
-    // call produces a single `{op:'set', path:'', oldValue:<oldSchema>,
-    // newValue:<newSchema>}` edit where both values are ARRAYS. The shared
-    // `iteration-library/ui/diff.renderDiffCard` only triggers per-leaf
-    // splitting when both values are plain objects, so naively passing the
-    // schema array would render as one giant stringified diff — screenshot
-    // bug #20.
-    //
-    // The fix: compare the two arrays by node-type id, then for each
-    // modified entry synthesize an empty-path `set` edit between the two
-    // node-type OBJECTS so renderDiffCard's walk-diff fires per-changed-
-    // field within the node type. Added/removed entries get one card each
-    // showing the whole new/old node-type body — there's no shared "before"
-    // to diff against, so a single-side render is the most truthful view.
-    // ──────────────────────────────────────────────────────────────────
-    function renderSchemaArrayPendingCards(before, after) {
-        const beforeIds = new Map((Array.isArray(before) ? before : []).map(x => [String(x?.id || ''), x]));
-        const afterIds = new Map((Array.isArray(after) ? after : []).map(x => [String(x?.id || ''), x]));
-        const added = [...afterIds.keys()].filter(id => id && !beforeIds.has(id));
-        const removed = [...beforeIds.keys()].filter(id => id && !afterIds.has(id));
-        const modified = [...afterIds.keys()].filter(id => {
-            if (!id || !beforeIds.has(id)) return false;
-            // Stable stringify is overkill here — both sides come from the
-            // same normalizer (tools.js calls normalizeNodeTypeSchema before
-            // emitting the edit), so key order matches.
-            return JSON.stringify(beforeIds.get(id)) !== JSON.stringify(afterIds.get(id));
-        });
-
-        const syntheticEdits = [];
-        const fieldLabels = {};
-        // Modified: empty-path set on the two node-type objects → triggers
-        // the shared component's walkDiff → one sub-card per changed leaf.
-        for (const id of modified) {
-            syntheticEdits.push({
-                op: 'set',
-                path: '',
-                oldValue: beforeIds.get(id),
-                newValue: afterIds.get(id),
-            });
-        }
-        // Added / removed: synthesize a path-keyed set so renderDiffCard
-        // takes the non-empty-path branch and labels the card by node-type
-        // id. Empty-path with one side missing wouldn't trigger per-leaf
-        // splitting anyway (the && short-circuits on the missing value), so
-        // a single-card render is cleaner than firing a malformed diff. The
-        // raw `nodeTypeSchema.<id>` path leaks the storage-internal key into
-        // the UI, so a fieldLabels override maps it back to just the id so
-        // the shared humanizePath renders "Field updated: <id>".
-        for (const id of added) {
-            const path = `nodeTypeSchema.${id}`;
-            fieldLabels[path] = id;
-            syntheticEdits.push({
-                op: 'set',
-                path,
-                oldValue: undefined,
-                newValue: afterIds.get(id),
-            });
-        }
-        for (const id of removed) {
-            const path = `nodeTypeSchema.${id}`;
-            fieldLabels[path] = id;
-            syntheticEdits.push({
-                op: 'set',
-                path,
-                oldValue: beforeIds.get(id),
-                newValue: undefined,
-            });
-        }
-        if (syntheticEdits.length === 0) {
-            return `<div class="mg_schema_it_pending_card"><div class="mg_schema_it_pending_note">${escapeHtmlLocal(t('(no effective change)'))}</div></div>`;
-        }
-        return ITER_UI.diff.renderDiffCard(syntheticEdits, { i18n: tf, fieldLabels });
-    }
-
-    // Pending-edit card rendering now lives in the bus's profile-edit
-    // kind (registered above), which wraps `renderSchemaArrayPendingCards`
-    // via its `renderDiff` hook. The legacy `renderPendingEditCard`
-    // wrapper has been retired to avoid double-rendering every staged
-    // edit (renderEditCard path + bus.renderCardsForMessage both fire).
+    // Pending-edit card rendering lives in the bus's profile-edit kind
+    // (registered above): the module-scope renderSchemaArrayPendingCards /
+    // renderConfigPendingCards pair renders the diff body, discriminated
+    // per entry by the kind's target-type check. The legacy
+    // `renderPendingEditCard` wrapper has been retired to avoid
+    // double-rendering every staged edit (renderEditCard path +
+    // bus.renderCardsForMessage both fire).
 
     // ──────────────────────────────────────────────────────────────────
     // Chat-message rendering. MG delegates to
@@ -1510,7 +1666,7 @@ export async function openSchemaIterationStudio(deps) {
         const autoCls = message.auto ? ' mg_schema_it_msg_auto' : '';
 
         const innerHtml = ITER_UI.message.renderMessageCard(message, {
-            toolDisplay: MG_SCHEMA_TOOL_DISPLAY,
+            toolDisplay: MG_CONFIG_TOOL_DISPLAY,
             // Bus's profile-edit card owns the diff body — no legacy
             // edit-card render here.
             renderEditCard: () => '',
@@ -1656,7 +1812,7 @@ export async function openSchemaIterationStudio(deps) {
                     if (typeof after === 'undefined') continue;
                     pendingEditsForPreview.push({ op: 'set', path: '', oldValue: before, newValue: after });
                 }
-                const previewHtml = renderMgSchemaPreviewPane(
+                const previewHtml = renderMgConfigPreviewPane(
                     state.live,
                     pendingEditsForPreview,
                     t,
@@ -1695,7 +1851,7 @@ export async function openSchemaIterationStudio(deps) {
      * refactor the last-user message is passed VERBATIM (no injected
      * `[Current working schema]` / `[Global baseline schema]` outline) —
      * the iterating AI reads live state on demand via
-     * `mg_schema_read_fields`.
+     * `mg_config_list_fields` / `mg_config_read_fields`.
      *
      * `snapshot` is kept in the signature for call-site compatibility
      * (some existing callers threaded the per-turn snapshot in for the
@@ -1819,15 +1975,15 @@ export async function openSchemaIterationStudio(deps) {
         // mid-turn character swap or settings edit can't slice the turn
         // across two different worldviews.
         const turnSnapshot = captureTurnSnapshot();
-        const systemPrompt = appendScopeHintIfNeeded(turnSnapshot.schemaIterSystemPrompt, turnSnapshot.helperSession);
+        const systemPrompt = appendScopeHintIfNeeded(turnSnapshot.configIterSystemPrompt, turnSnapshot.helperSession);
 
         // Read-first refactor: continuation rounds replay the existing
         // history verbatim (no AUTO CONTINUE user filler / no injected
-        // current-schema block). The outer loop keeps running as long
+        // current-config block). The outer loop keeps running as long
         // as the previous round emitted any tool call — that's the sole
         // continuation signal now, program-driven. The iterating AI is
-        // expected to call `mg_schema_read_fields` on demand to see any
-        // live-schema slice it needs.
+        // expected to call `mg_config_list_fields` / `mg_config_read_fields`
+        // on demand to see any live-config slice it needs.
 
         const taskMessages = buildTaskMessages(systemPrompt, turnSnapshot);
 
@@ -1882,8 +2038,12 @@ export async function openSchemaIterationStudio(deps) {
                         // turn-snapshot scope so a mid-turn character swap
                         // can't change the decision after the system prompt
                         // already committed to one path.
+                        //
+                        // Resets replace ONLY the schema half of the working
+                        // document — the settings half must survive, or a
+                        // reset would silently drop staged settings edits.
                         if (turnSnapshot.helperSession.scope === 'character') {
-                            state.live = createBlankSchemaShell();
+                            state.live = { ...state.live, schema: createBlankSchemaShell() };
                             state.session.messages.push({
                                 id: makeMessageId(),
                                 role: 'system',
@@ -1900,10 +2060,14 @@ export async function openSchemaIterationStudio(deps) {
                         // never lists resetToGlobal, so silent-drop is fine.
                         // The global schema clone comes from the turn snapshot
                         // so a mid-turn settings edit doesn't change what
-                        // "global" means halfway through.
+                        // "global" means halfway through. Settings survive
+                        // for the same reason as resetToBlank above.
                         if (turnSnapshot.helperSession.scope === 'character'
                             && turnSnapshot.helperSession.hasOverride) {
-                            state.live = normalizeNodeTypeSchema(structuredClone(turnSnapshot.globalSchema || []));
+                            state.live = {
+                                ...state.live,
+                                schema: normalizeNodeTypeSchema(structuredClone(turnSnapshot.globalConfig.schema || [])),
+                            };
                             state.session.messages.push({
                                 id: makeMessageId(),
                                 role: 'system',
@@ -1927,18 +2091,23 @@ export async function openSchemaIterationStudio(deps) {
             : (Array.isArray(result?.toolCalls)
                 ? result.toolCalls.filter((c) => !isMgSchemaControlCall(c))
                 : []);
-        // Split into read tools (lorebook discovery + retrieval) and edit
-        // tools (schema mutations). Reads execute inline so their results
-        // can be threaded back into the next round's task messages; edits
+        // Split into read tools (config discovery + retrieval, lorebook
+        // discovery + retrieval) and edit tools (config + schema
+        // mutations). Reads execute inline so their results can be
+        // threaded back into the next round's task messages; edits
         // normalize into pending Edit ops the user reviews + applies.
         //
-        // Read tools split into two dispatchers: lorebook reads (call the
-        // shared iteration-library helper against the character's bound
-        // world books) and schema reads (`mg_schema_read_fields`, which
-        // pulls from `state.live` directly). Both return `{result, ok}`
-        // shape so the persisted tool_result envelope is uniform.
-        const readToolCalls = nonControlCalls.filter((c) => isLorebookReadTool(c?.name) || isSchemaReadTool(c?.name));
-        const editToolCalls = nonControlCalls.filter((c) => !isLorebookReadTool(c?.name) && !isSchemaReadTool(c?.name));
+        // Read tools split into two dispatchers: the config reads
+        // (`mg_config_list_fields` / `mg_config_read_fields`, which read
+        // the working / global / default views of the `{ schema,
+        // settings }` document) and lorebook reads (call the shared
+        // iteration-library helper against the character's bound world
+        // books). Anything else the catalog does not advertise lands in
+        // the edit loop and fails there with a real `unknown_tool` error
+        // reply — including a hallucinated `mg_schema_read_fields` call,
+        // which no longer has a dispatch route.
+        const readToolCalls = nonControlCalls.filter((c) => isLorebookReadTool(c?.name) || isMgConfigReadTool(c));
+        const editToolCalls = nonControlCalls.filter((c) => !isLorebookReadTool(c?.name) && !isMgConfigReadTool(c));
         const assistantText = firstAssistantText.trim();
 
         // Execute read tools synchronously. Each call gets a stable id so
@@ -1956,15 +2125,23 @@ export async function openSchemaIterationStudio(deps) {
             let resultPayload;
             let statusLabel = 'ok';
             try {
-                if (isSchemaReadTool(call?.name)) {
-                    // Schema read — pure read against `state.live`.
-                    // `dispatchMgSchemaReadFields` throws `invalid_args`
-                    // on a non-array `paths`; anything else lands here
-                    // as a tool reply the AI can inspect and retry.
-                    resultPayload = await dispatchMgSchemaReadFields({
-                        liveSchema: state.live,
-                        args: call?.args,
-                    });
+                if (isMgConfigReadTool(call)) {
+                    // Config read — pure read against the three views of the
+                    // working document. The dispatcher throws `invalid_args`
+                    // on a non-array `paths` / unknown source; anything else
+                    // lands here as a tool reply the AI can inspect and retry.
+                    if (String(call?.name || '') === READ_TOOL_NAMES.listFields) {
+                        resultPayload = buildConfigFieldCatalog({ schema: state.live.schema, group: call?.args?.group });
+                    } else {
+                        resultPayload = await dispatchMgConfigReadFields({
+                            sources: {
+                                working: state.live,
+                                global: turnSnapshot.globalConfig,
+                                default: turnSnapshot.defaultConfig,
+                            },
+                            args: call?.args,
+                        });
+                    }
                 } else {
                     const out = await runLorebookReadTool({ id: callId, name: call?.name, args: call?.args }, avatarForReads);
                     if (out?.ok) {
@@ -2022,6 +2199,20 @@ export async function openSchemaIterationStudio(deps) {
                     {
                         live: chainedLive,
                         normalizeNodeTypeSchema,
+                        // Baseline an `unset` restores for the current
+                        // scope: character scope inherits from the GLOBAL
+                        // settings view; global scope inherits from the
+                        // code defaults. Missing baseline → undefined →
+                        // tools.js fails the call with `invalid_args`
+                        // (fail-closed, never a silent empty write).
+                        resolveUnsetBaseline: (rawPath) => {
+                            const path = String(rawPath || '');
+                            const key = path.startsWith('settings.') ? path.slice('settings.'.length) : path;
+                            const source = turnSnapshot.helperSession?.scope === 'character'
+                                ? turnSnapshot.globalConfig.settings
+                                : turnSnapshot.defaultConfig.settings;
+                            return source?.[key];
+                        },
                     },
                 );
                 if (Array.isArray(normalized) && normalized.length > 0) {
@@ -2074,7 +2265,7 @@ export async function openSchemaIterationStudio(deps) {
                     // executor failure is silently surfaced as a noop.
                     editToolResults.push({
                         tool_call_id: callId,
-                        content: { status: 'noop', message: 'No edits produced. The target schema state already matches what you requested; an earlier round may have already applied this change. Re-read the live schema before retrying — do not re-issue the same call. If you genuinely intended a different result, verify args (node_type identifier, value shape).' },
+                        content: { status: 'noop', message: 'No edits produced. The target state already matches what you requested; an earlier round may have already applied this change. Re-read the relevant fields before retrying — do not re-issue the same call. If you genuinely intended a different result, verify args (settings path or node_type identifier, value shape).' },
                         status: 'fail',
                     });
                 }
@@ -2133,7 +2324,7 @@ export async function openSchemaIterationStudio(deps) {
         // Stage this turn as a single ProposalBus proposal. The MG sandbox-
         // diff coalesces 1-or-N empty-path-set edits per turn (each call
         // chained off the previous call's newValue), so the user-visible
-        // proposal is "the cumulative new schema replaces the live one".
+        // proposal is "the cumulative next config replaces the live one".
         // sourceCallId binds the proposal to the first edit tool call's id
         // so renderTurnActions inside this message card can group correctly.
         if (edits.length > 0) {
@@ -2147,10 +2338,10 @@ export async function openSchemaIterationStudio(deps) {
             // entry committed. The bus's getCurrentPendingState walks the
             // chain, so the patch we record here lines up cleanly with
             // the approve-in-order replay.
-            const proposalSnapshot = await bus.getCurrentPendingState('profile-edit', { type: 'schema' });
+            const proposalSnapshot = await bus.getCurrentPendingState('profile-edit', { type: 'config' });
             await bus.propose({
                 kind: 'profile-edit',
-                target: { type: 'schema' },
+                target: { type: 'config' },
                 before: proposalSnapshot,
                 after: lastEdit.newValue,
                 sourceCallId: firstCallId,
@@ -2179,21 +2370,13 @@ export async function openSchemaIterationStudio(deps) {
     // conflict UI: just commit `newLive` and silently
     // drop any conflicting / already-done edits.
     //
-    // `state.pendingEdits` is cleared only after `commitLiveToSchema`
-    // resolves; on failure the staged batch and the pre-apply `state.live`
-    // snapshot are both restored so the user can retry instead of losing
-    // the iteration.
-    //
-    // On success we toast the user, then mark the most recent unapplied
-    // assistant message so renderMessageCard can show the Applied label
-    // and a Rollback button.
-    // ──────────────────────────────────────────────────────────────────
     // Apply / discard / continue-after-review have moved to the bus.
     // Approve = bus.approve (immediate commit + drift check); reject = bus.reject.
     // The drainBusOutcomes pump (above) is the equivalent of the legacy
     // continueAfterReviewDecision: after the user decides on any batch of
     // proposals, it pushes a synthetic outcome message and re-fires the
     // iteration loop.
+    // ──────────────────────────────────────────────────────────────────
 
     // ──────────────────────────────────────────────────────────────────
     // Per-message actions.
@@ -2203,11 +2386,9 @@ export async function openSchemaIterationStudio(deps) {
     // tied to the discarded turn, refill the textarea with the
     // original prompt, and re-fire the send pipeline.
     //
-    // rollbackBatch(msgId): inverse-apply each edit in the message's
-    // batch against state.live (right-to-left, so dependent ops unwind in
-    // creation order), commit the result, mark the message rolledBackAt.
-    // Bails on the first edit whose op lacks an inverse — partial rollback
-    // would leave the schema in an inconsistent state.
+    // Rollback of committed turns is bus-driven (bus.rollbackAllInMessages);
+    // it stops at the first failed rollback so a half-unwound configuration
+    // never lands.
     // ──────────────────────────────────────────────────────────────────
     async function regenerateFromMessage(messageId) {
         if (state.isBusy) return;
@@ -2430,13 +2611,13 @@ export async function openSchemaIterationStudio(deps) {
     const popupId = `mg_schema_it_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     const popupHtml = buildPopupHtml({
         popupId,
-        title: t('Memory Graph Schema Studio'),
+        title: t('Memory Graph Configuration Studio'),
         historyOpen: Boolean(state.session.surfaceState?.historyOpen),
         historyLabel: t('History'),
         newSessionLabel: t('New session'),
         clearAllLabel: t('Clear all'),
         sendLabel: t('Send'),
-        composerPlaceholder: t('Describe what to change in the schema...'),
+        composerPlaceholder: t('Describe what to change in the configuration...'),
         autoApply: Boolean(state.session.surfaceState?.autoApply),
         autoApplyLabel: t('Auto-apply edits'),
         chatTabLabel: t('Chat'),

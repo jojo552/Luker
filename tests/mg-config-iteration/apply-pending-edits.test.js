@@ -1,13 +1,16 @@
-// tests/mg-schema-iteration/apply-pending-edits.test.js
+// tests/mg-config-iteration/apply-pending-edits.test.js
 //
-// Guards the three critical fixes that landed in the MG schema studio's
-// session + apply paths:
+// Guards the three critical fixes that landed in the MG configuration
+// studio's session + apply paths:
 //
 //   1. Two-or-more pending sandbox-diff edits both apply. The shared
 //      iteration-library `applyEdits` is lodash-backed, and lodash.set on
 //      empty path is a no-op — so a batch of 2+ `{op:'set', path:''}` edits
 //      used to silently no-op the second through nth edits. The fix chains
-//      each edit through `applyEmptyPathSet` so every edit lands.
+//      each edit through `applyEmptyPathSet` so every edit lands. The
+//      working document is the `{ schema, settings }` configuration object,
+//      so the merge has to compose BOTH halves: the schema array merges
+//      id-keyed and the settings object merges per key.
 //
 //   2. `clearAllHistory` aborts any in-flight LLM call BEFORE deleting
 //      sessions. A slow LLM response landing on a wiped session corrupts
@@ -20,7 +23,7 @@
 //      session would surprise the user every time they click New Session.
 //
 // The studio.js helpers under test are closure-private inside
-// `openSchemaIterationStudio`. Two routes are used to cover them:
+// `openConfigIterationStudio`. Two routes are used to cover them:
 //   - `_testOnly_applyEmptyPathSet` (module-level export) — directly used
 //     by the apply loop, so unit-testable.
 //   - `_testOnly_createNewSession` (module-level export) — returns the
@@ -67,16 +70,16 @@ let _testOnly_applyEmptyPathSet;
 let _testOnly_createNewSession;
 
 beforeAll(async () => {
-    const mod = await import('../../public/scripts/extensions/memory-graph/schema-iteration/studio.js');
+    const mod = await import('../../public/scripts/extensions/memory-graph/config-iteration/studio.js');
     _testOnly_applyEmptyPathSet = mod._testOnly_applyEmptyPathSet;
     _testOnly_createNewSession = mod._testOnly_createNewSession;
 });
 
-describe('MG schema — multi-edit apply (chain-apply fix)', () => {
-    // Mirror the apply loop from studio.js#applyPendingEdits. The loop is
-    // closure-private; re-encoding it here pins down the contract: every
-    // empty-path set in the batch must land, with the LAST edit's newValue
-    // ending up in `state.live`.
+describe('MG config — multi-edit apply (chain-apply fix over { schema, settings })', () => {
+    // Mirror the apply loop from studio.js's bus-driven approve path. The
+    // loop is closure-private; re-encoding it here pins down the contract:
+    // every empty-path set in the batch must land, with the LAST edit's
+    // newValue ending up in `state.live`.
     function runApplyLoop(initialLive, pendingEdits) {
         let cursor = initialLive;
         for (const edit of pendingEdits) {
@@ -91,74 +94,97 @@ describe('MG schema — multi-edit apply (chain-apply fix)', () => {
     }
 
     test('single empty-path edit lands its newValue', () => {
-        const initial = [{ id: 'character', tableColumns: ['name'] }];
-        const newSchema = [
-            { id: 'character', tableColumns: ['name', 'mood'] },
-        ];
+        const initial = {
+            schema: [{ id: 'character', tableColumns: ['name'] }],
+            settings: { recallMaxIterations: 3 },
+        };
+        const next = {
+            schema: [{ id: 'character', tableColumns: ['name', 'mood'] }],
+            settings: { recallMaxIterations: 5 },
+        };
         const result = runApplyLoop(initial, [
-            { op: 'set', path: '', oldValue: initial, newValue: newSchema },
+            { op: 'set', path: '', oldValue: initial, newValue: next },
         ]);
-        expect(result.map(e => e.id)).toEqual(['character']);
-        expect(result[0].tableColumns).toEqual(['name', 'mood']);
+        expect(result.schema.map(e => e.id)).toEqual(['character']);
+        expect(result.schema[0].tableColumns).toEqual(['name', 'mood']);
+        expect(result.settings.recallMaxIterations).toBe(5);
     });
 
-    test('two empty-path edits BOTH apply — second edit is not silently dropped', () => {
+    test('two PARALLEL empty-path edits both apply — schema halves merge id-keyed', () => {
         // Catastrophic bug regression test: when the LLM emits 2+ tool calls
         // in one turn, the runner stages 2+ pending edits (each is a coarse
-        // {op:'set', path:'', newValue:<whole schema>}). The legacy engine
+        // {op:'set', path:'', newValue:<whole config>}). The legacy engine
         // routed all of them through one applyEdits call, where lodash.set
         // on empty path no-ops, so only the FIRST edit's newValue made it
-        // through (and even that one only via a special single-edit case).
-        // The fix chains each edit independently.
-        const initial = [{ id: 'character', tableColumns: ['name'] }];
-        // First tool call: add `event` node type.
-        const afterFirst = [
-            { id: 'character', tableColumns: ['name'] },
-            { id: 'event', tableColumns: ['summary'] },
-        ];
-        // Second tool call (built on top of the first sandbox): also add `location`.
-        const afterSecond = [
-            { id: 'character', tableColumns: ['name'] },
-            { id: 'event', tableColumns: ['summary'] },
-            { id: 'location', tableColumns: ['name'] },
-        ];
+        // through. The fix chains each edit independently — and with the
+        // config document the merge must compose PARALLEL edits: both tool
+        // calls built their sandbox off the same initial document, so each
+        // edit's newValue carries only its own mutation. The id-keyed array
+        // merge + per-key object merge must keep both.
+        const initial = {
+            schema: [{ id: 'character', tableColumns: ['name'] }],
+            settings: { recallMaxIterations: 3, rpmLimit: 0 },
+        };
+        // First tool call: add `event` node type + bump recallMaxIterations.
+        const afterFirst = {
+            schema: [
+                { id: 'character', tableColumns: ['name'] },
+                { id: 'event', tableColumns: ['summary'] },
+            ],
+            settings: { recallMaxIterations: 5, rpmLimit: 0 },
+        };
+        // Second tool call (built on the SAME initial sandbox, not chained):
+        // add `location` node type + bump rpmLimit.
+        const afterSecond = {
+            schema: [
+                { id: 'character', tableColumns: ['name'] },
+                { id: 'location', tableColumns: ['name'] },
+            ],
+            settings: { recallMaxIterations: 3, rpmLimit: 30 },
+        };
         const result = runApplyLoop(initial, [
             { op: 'set', path: '', oldValue: initial, newValue: afterFirst },
-            { op: 'set', path: '', oldValue: afterFirst, newValue: afterSecond },
+            { op: 'set', path: '', oldValue: initial, newValue: afterSecond },
         ]);
-        // The second edit's newValue must win — if the bug regressed, result
-        // would only contain `character` + `event` (the first edit's value).
-        expect(result.map(e => e.id)).toEqual(['character', 'event', 'location']);
+        // Both parallel schema edits survive — if the bug regressed, the
+        // second edit's schema would clobber `event` out of the result.
+        expect(result.schema.map(e => e.id)).toEqual(['character', 'event', 'location']);
+        // Both parallel settings edits survive per-key.
+        expect(result.settings).toEqual({ recallMaxIterations: 5, rpmLimit: 30 });
     });
 
     test('three empty-path edits all chain through (apply loop is order-preserving)', () => {
         // Generalizes the 2-edit regression: any N edits must compose so the
-        // Nth edit's newValue is the final live state.
-        const initial = [{ id: 'a' }];
-        const edits = [
-            { op: 'set', path: '', oldValue: initial, newValue: [{ id: 'a' }, { id: 'b' }] },
-            { op: 'set', path: '', oldValue: [{ id: 'a' }, { id: 'b' }], newValue: [{ id: 'a' }, { id: 'b' }, { id: 'c' }] },
-            { op: 'set', path: '', oldValue: [{ id: 'a' }, { id: 'b' }, { id: 'c' }], newValue: [{ id: 'a' }, { id: 'b' }, { id: 'c' }, { id: 'd' }] },
-        ];
-        const result = runApplyLoop(initial, edits);
-        expect(result.map(e => e.id)).toEqual(['a', 'b', 'c', 'd']);
+        // Nth edit's newValue is the final live state. Chained edits (each
+        // oldValue = the previous newValue) collapse to the last value.
+        const initial = { schema: [{ id: 'a' }], settings: { recallMaxIterations: 3 } };
+        const second = { schema: [{ id: 'a' }, { id: 'b' }], settings: { recallMaxIterations: 3 } };
+        const third = { schema: [{ id: 'a' }, { id: 'b' }, { id: 'c' }], settings: { recallMaxIterations: 4 } };
+        const fourth = { schema: [{ id: 'a' }, { id: 'b' }, { id: 'c' }, { id: 'd' }], settings: { recallMaxIterations: 4 } };
+        const result = runApplyLoop(initial, [
+            { op: 'set', path: '', oldValue: initial, newValue: second },
+            { op: 'set', path: '', oldValue: second, newValue: third },
+            { op: 'set', path: '', oldValue: third, newValue: fourth },
+        ]);
+        expect(result.schema.map(e => e.id)).toEqual(['a', 'b', 'c', 'd']);
+        expect(result.settings.recallMaxIterations).toBe(4);
     });
 
     test('applyEmptyPathSet returns a structuredClone — caller cannot mutate the edit\'s newValue via the result', () => {
         // The fix relies on the helper deep-cloning so subsequent edits in
-        // the batch (or external consumers like commitLiveToSchema) can't
-        // accidentally mutate the staged edit array.
-        const newValue = [{ id: 'character', tableColumns: ['name'] }];
-        const edit = { op: 'set', path: '', oldValue: [], newValue };
-        const result = _testOnly_applyEmptyPathSet([], edit);
+        // the batch (or external consumers like commitLiveToConfig) can't
+        // accidentally mutate the staged edit document.
+        const newValue = { schema: [{ id: 'character', tableColumns: ['name'] }], settings: {} };
+        const edit = { op: 'set', path: '', oldValue: { schema: [], settings: {} }, newValue };
+        const result = _testOnly_applyEmptyPathSet({ schema: [], settings: {} }, edit);
         expect(result).toEqual(newValue);
         expect(result).not.toBe(newValue);
-        result[0].tableColumns.push('mood');
-        expect(newValue[0].tableColumns).toEqual(['name']);
+        result.schema[0].tableColumns.push('mood');
+        expect(newValue.schema[0].tableColumns).toEqual(['name']);
     });
 });
 
-describe('MG schema — createNewSession baseline shape', () => {
+describe('MG config — createNewSession baseline shape', () => {
     test('returns a fresh session with surfaceState.autoApply = false by default', () => {
         // This is the OFF-state default. The preservation patch in
         // startNewSession overlays { autoApply: true } only when the
@@ -198,7 +224,7 @@ describe('MG schema — createNewSession baseline shape', () => {
 // still pass because it never reads the product file.
 //
 // `startNewSession` and `clearAllHistory` are closure-private inside
-// `openSchemaIterationStudio` and can't be invoked directly under jest, and
+// `openConfigIterationStudio` and can't be invoked directly under jest, and
 // exposing them as `_testOnly_*` exports would be an invasive product change
 // just for test convenience. The structural-assertion approach used in
 // `tests/memory-graph/injection-window.test.js` (lines 307+) is the right
@@ -215,7 +241,7 @@ const __mgSchemaTestDir = dirname(fileURLToPath(import.meta.url));
 const STUDIO_JS = readFileSync(
     resolvePath(
         __mgSchemaTestDir, '..', '..',
-        'public', 'scripts', 'extensions', 'memory-graph', 'schema-iteration', 'studio.js',
+        'public', 'scripts', 'extensions', 'memory-graph', 'config-iteration', 'studio.js',
     ),
     'utf8',
 );
@@ -243,7 +269,7 @@ function extractAsyncFnBody(source, name) {
     return source.slice(start, i - 1);
 }
 
-describe('MG schema — startNewSession autoApply preservation (MG-10) [structural]', () => {
+describe('MG config — startNewSession autoApply preservation (MG-10) [structural]', () => {
     // Closure body in studio.js (lines ~1221-1250 at time of writing).
     // The contract we guard:
     //   1. priorAutoApply is captured from state.session?.surfaceState?.autoApply
@@ -322,7 +348,7 @@ describe('MG schema — startNewSession autoApply preservation (MG-10) [structur
     });
 });
 
-describe('MG schema — clearAllHistory abort-then-delete ordering [structural]', () => {
+describe('MG config — clearAllHistory abort-then-delete ordering [structural]', () => {
     // Closure body in studio.js (lines ~1252-1266 at time of writing).
     // The contract: any in-flight LLM call MUST be aborted before sessions
     // are deleted, otherwise a slow response could land in the freshly-

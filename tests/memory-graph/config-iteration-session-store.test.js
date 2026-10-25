@@ -1,6 +1,6 @@
-// tests/memory-graph/schema-iteration-session-store.test.js
+// tests/memory-graph/config-iteration-session-store.test.js
 //
-// Backend coverage for the scope-aware MG schema-iteration session store:
+// Backend coverage for the scope-aware MG configuration session store:
 //   - global scope → extension_settings.memory_graph.schema_iter_global_sessions
 //   - character scope → sidecar under MG_SIDECAR_NAMESPACE on the avatar
 //
@@ -18,7 +18,7 @@ import {
     normalizeMessageShape,
     MG_SIDECAR_NAMESPACE,
     MG_GLOBAL_BUCKET_KEY,
-} from '../../public/scripts/extensions/memory-graph/schema-iteration/session-store.js';
+} from '../../public/scripts/extensions/memory-graph/config-iteration/session-store.js';
 
 function makeStubs({ scope = 'global', avatar = null, initialSidecar = null } = {}) {
     const sidecars = {};

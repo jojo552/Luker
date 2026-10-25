@@ -6145,8 +6145,13 @@ body:not(.movingUI) .drawer-content.maximized {
     display: none;
 }
 
+#reverse_proxy_conflict_warning {
+    display: none;
+}
+
 /* --- Reverse proxy warning --- */
-.reverse_proxy_warning:not(small) {
+.reverse_proxy_warning:not(small),
+.reverse_proxy_conflict_warning {
     color: var(--warning);
     background-color: color-mix(in srgb, var(--SmartThemeBlurTintColor) 85%, transparent);
     text-shadow: none !important;

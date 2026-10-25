@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later
  * Copyright (C) 2026 FunnyCups
  *
- * Memory Graph Schema — AI iteration popup styles.
+ * Memory Graph configuration studio — AI iteration popup styles.
  *
  * Design language mirrors luker-studio.css (the shared shell stylesheet)
  * via local tokens — kept namespaced (`mg_schema_it_*`) so the popup remains
@@ -180,52 +180,6 @@
     gap: var(--it-space-xs);
 }
 
-/* ── Toolbar (reference picker + mode selector) ─────────────────────── */
-
-.mg_schema_it_toolbar {
-    flex: 0 0 auto;
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--it-space-md);
-    padding: var(--it-space-sm) var(--it-space-md);
-    border: var(--it-border);
-    border-radius: var(--it-radius-lg);
-    background: var(--it-panel-bg);
-    align-items: center;
-}
-
-.mg_schema_it_toolbar_label {
-    display: flex;
-    align-items: center;
-    gap: var(--it-space-xs);
-    font-size: 0.92em;
-    min-width: 0;
-    flex: 1 1 260px;
-}
-
-.mg_schema_it_toolbar_label_text {
-    font-weight: 600;
-    opacity: var(--it-text-muted);
-    white-space: nowrap;
-    color: inherit;
-}
-
-.mg_schema_it_reference_select,
-.mg_schema_it_mode_select {
-    flex: 1 1 auto;
-    min-width: 0;
-    max-width: 320px;
-    font-family: inherit;
-    font-size: 0.95em;
-    border-radius: var(--it-radius-sm);
-    transition: border-color var(--it-motion-fast);
-}
-
-.mg_schema_it_reference_select:focus,
-.mg_schema_it_mode_select:focus {
-    border-color: color-mix(in oklab, var(--it-accent-primary) 55%, transparent);
-}
-
 /* ── Message list (chat) ───────────────────────────────────────────── */
 
 .mg_schema_it_messages {
@@ -296,25 +250,6 @@
 
 /* ── Pending edits ─────────────────────────────────────────────────── */
 
-.mg_schema_it_pending {
-    flex: 0 0 auto;
-    border: 1px solid color-mix(in oklab, var(--it-accent-system) 40%, transparent);
-    border-left: 3px solid color-mix(in oklab, var(--it-accent-system) 70%, transparent);
-    padding: var(--it-space-sm) var(--it-space-md);
-    margin: 0;
-    border-radius: var(--it-radius-md);
-    background: color-mix(in oklab, var(--it-accent-system) 7%, transparent);
-    max-height: 320px;
-    overflow-y: auto;
-}
-
-.mg_schema_it_pending_title {
-    font-weight: 700;
-    margin-bottom: var(--it-space-xs);
-    font-size: 0.96em;
-    opacity: var(--it-text-strong);
-}
-
 .mg_schema_it_pending_card {
     margin: var(--it-space-xs) 0;
     padding: var(--it-space-xs) var(--it-space-sm);
@@ -353,12 +288,6 @@
     word-break: break-word;
 }
 
-.mg_schema_it_pending_card .diff_anchor {
-    opacity: var(--it-text-muted);
-    word-break: break-word;
-    font-style: italic;
-}
-
 .mg_schema_it_pending_card .diff_arrow {
     margin: 0 6px;
     opacity: var(--it-text-muted);
@@ -374,39 +303,22 @@
     font-style: italic;
 }
 
-.mg_schema_it_pending_actions {
-    margin-top: var(--it-space-sm);
-    display: flex;
-    justify-content: flex-end;
-    gap: var(--it-space-xs);
+/* Configuration diff card: "Schema changes" / "Settings changes" sections */
+
+.mg_schema_it_pending_section {
+    margin: var(--it-space-xs) 0;
 }
 
-/* MG schema-specific: list wrapper + per-entry diff folded under each pending card */
-
-.mg_schema_it_pending_list {
-    display: flex;
-    flex-direction: column;
-    gap: var(--it-space-xs);
+.mg_schema_it_pending_section_title {
+    font-weight: 700;
+    font-size: 0.9em;
+    opacity: var(--it-text-strong);
+    margin-bottom: var(--it-space-xs);
 }
 
-.mg_schema_it_pending_entry_diff {
-    margin: 4px 0 4px 1em;
-    padding: 4px 0 4px var(--it-space-sm);
-    border-left: 2px solid var(--it-divider);
-}
-.mg_schema_it_pending_entry_diff > summary {
-    cursor: pointer;
-    padding: 2px 0;
-    font-size: 0.88em;
-    opacity: var(--it-text-muted);
-}
-.mg_schema_it_pending_entry_diff[open] > summary {
-    opacity: var(--it-text-default);
+.mg_schema_it_pending_row_label {
     font-weight: 600;
-}
-.mg_schema_it_pending_entry_diff > summary code {
-    background: transparent;
-    padding: 0;
+    margin-right: var(--it-space-xs);
 }
 
 /* ── Composer ──────────────────────────────────────────────────────── */
@@ -464,7 +376,6 @@
         min-width: 0;
         gap: var(--it-space-sm);
     }
-    .mg_schema_it_toolbar_label { flex-basis: 100%; }
     .mg_schema_it_msg { max-width: 95%; }
 }
 

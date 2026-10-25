@@ -16,6 +16,7 @@ import multer from 'multer';
 import responseTime from 'response-time';
 import helmet from 'helmet';
 import bodyParser from 'body-parser';
+import { ByteBudgetLedger } from './util/byte-budget.js';
 
 // Timestamp all console output and capture to circular log buffer.
 // JSON.stringify throws on circular references / BigInt — if the wrapper ever
@@ -24,7 +25,15 @@ import bodyParser from 'body-parser';
 // aborts with an empty stderr. So: serialize defensively, and never let buffer
 // bookkeeping interfere with the underlying console call.
 const BACKEND_LOG_MAX = 500;
+// Byte budget for the backend log buffer. Entries serialize whole objects
+// with JSON.stringify, so full provider bodies produce ~0.5 MB entries and
+// 500 of them would retain ~250 MB. 128 MB caps that at ~3% of Node's ~4 GB
+// default old-space while keeping the post-mortem tail of backend logs
+// useful. This buffer also ships inside /api/debug-export bundles, so the
+// bound protects bundle sizes too.
+const BACKEND_LOG_BYTE_BUDGET_BYTES = 128 * 1024 * 1024;
 export const backendLogBuffer = [];
+const backendLogLedger = new ByteBudgetLedger(BACKEND_LOG_BYTE_BUDGET_BYTES);
 let backendLogCounter = 0;
 function serializeLogArg(value) {
     if (typeof value === 'string') return value;
@@ -44,8 +53,18 @@ function serializeLogArg(value) {
         const ts = new Date().toISOString();
         try {
             const entry = { id: ++backendLogCounter, ts, level, message: args.map(serializeLogArg).join(' ') };
-            if (backendLogBuffer.length >= BACKEND_LOG_MAX) backendLogBuffer.shift();
+            if (backendLogBuffer.length >= BACKEND_LOG_MAX) {
+                backendLogLedger.untrack(backendLogBuffer[0]);
+                backendLogBuffer.shift();
+            }
             backendLogBuffer.push(entry);
+            backendLogLedger.track(entry);
+            // Byte budget: evict oldest first; the newest entry always
+            // survives so a single oversized line is still captured.
+            while (backendLogLedger.isOver() && backendLogBuffer.length > 1) {
+                backendLogLedger.untrack(backendLogBuffer[0]);
+                backendLogBuffer.shift();
+            }
         } catch { /* never let log capture wreck the underlying console call */ }
         original(`[${ts}]`, ...args);
     };
@@ -218,10 +237,6 @@ app.use((req, res, next) => {
     next();
 });
 
-app.use(bodyParser.json({ limit: '500mb' }));
-app.use(bodyParser.urlencoded({ extended: true, limit: '500mb' }));
-
-// CORS Settings //
 const corsEnabled = getConfigValue('cors.enabled', true, 'boolean');
 if (corsEnabled) {
     const corsOrigin = getConfigValue('cors.origin', 'null');
@@ -496,6 +511,17 @@ app.use(enforceUserQuotaMiddleware);
 // so /api/sync/v1/* is unaffected, and AFTER requireLoginMiddleware so
 // the middleware can read `request.user.profile.handle`.
 app.use(syncInProgressMiddleware());
+
+// Body parsing runs AFTER every access control above (Basic Auth, IP
+// whitelist, host validation, cookie session, CSRF, account login,
+// storage quota, the LAN sync write-gate) so an unauthorized request is
+// rejected before a single body byte is buffered. Authenticated users
+// legitimately post large payloads (character imports, chat exports,
+// settings saves), so the generous limit applies only inside the trust
+// boundary.
+app.use(bodyParser.json({ limit: '500mb' }));
+app.use(bodyParser.urlencoded({ extended: true, limit: '500mb' }));
+
 app.post('/api/ping', (request, response) => {
     if (request.query.extend && request.session) {
         request.session.touch = Date.now();

@@ -80,16 +80,20 @@ Request records live in memory, capped at 200 per user. Each user keeps only the
 
 Completed records are kept for two hours, then removed. A record that is still generating is not held to this clock: in-flight requests are kept for up to six hours so a long generation or a stalled stream is never swept before its completion callback runs. Expired records are swept every five minutes, which means a record survives at most two hours and five minutes past its start.
 
-Both values can be tuned in `config.yaml`:
+Record count and age alone do not bound memory: records hold full request and response bodies, and a chat with inlined images stores those bytes twice, before and after provider conversion. The inspector therefore also enforces a byte budget across all users: once the retained size passes the budget, the oldest completed records are evicted first. Records for requests that are still generating are never dropped by the budget, and a single record larger than the whole budget is kept rather than discarded.
+
+All values can be tuned in `config.yaml`:
 
 ```yaml
 requestInspector:
   ttlMs: 7200000
   cleanupIntervalMs: 300000
+  byteBudgetBytes: 268435456
 ```
 
 - `ttlMs`: How long completed records are kept, in milliseconds
 - `cleanupIntervalMs`: How often the expiry sweep runs, in milliseconds
+- `byteBudgetBytes`: Soft cap on the heap bytes retained by request records across all users; when exceeded, the oldest completed records are evicted first
 
 ## Relation to Storage Quotas
 

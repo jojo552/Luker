@@ -2,27 +2,33 @@
 // Copyright (C) 2026 FunnyCups
 
 /**
- * Memory Graph Schema — plugin-owned system prompt.
+ * One-shot migration of the legacy schema-iteration prompt.
  *
- * Ported verbatim from schema-adapter.js (the buildSystemPrompt block inside
- * defineAdapter). The prompt describes the node-type schema fields and the
- * editing tools the model can call. Pure string-building, no DOM and no
- * i18n binding — the popup that consumes this module is responsible for
- * any wrapping or interpolation if needed.
+ * Older installs seeded `extension_settings.memory_graph.schemaIterSystemPrompt`
+ * with the schema-editor default and let the Advanced panel edit it. The
+ * configuration workbench reads a new key instead, and the new key is
+ * deliberately never seeded, so a stored default can no longer shadow later
+ * prompt updates.
  *
- * Read-first contract: the popup no longer injects the working schema
- * as an `[Current working schema]` outline block on every user turn.
- * The AI is expected to call `mg_schema_read_fields([...])` to pull
- * exact values from the live schema on demand before proposing set /
- * remove / reorder tool calls.
+ * `migrateConfigIterationPrompt` hands a user-authored legacy prompt over to
+ * the new slot exactly once, gated by `configPromptSchemaVersion`. Fresh
+ * installs and untouched legacy defaults copy nothing: the new slot stays
+ * empty and the runtime resolves the current default at view time. The
+ * legacy key is left on disk untouched so downgrades keep working.
+ *
+ * `LEGACY_SCHEMA_ITER_SYSTEM_PROMPT` freezes the retired default text. It
+ * must equal the value older installs seeded so untouched prompts are
+ * skipped by the comparison.
  */
+
+export const CONFIG_PROMPT_SCHEMA_VERSION = 1;
 
 const TOOL_SET_NODE_TYPE = 'mg_schema_set_node_type';
 const TOOL_REMOVE_NODE_TYPE = 'mg_schema_remove_node_type';
 const TOOL_REORDER_NODE_TYPES = 'mg_schema_reorder_node_types';
 const TOOL_READ_FIELDS = 'mg_schema_read_fields';
 
-export const DEFAULT_SCHEMA_ITER_SYSTEM_PROMPT = [
+export const LEGACY_SCHEMA_ITER_SYSTEM_PROMPT = [
     'You are editing the Memory Graph node-type schema for a SillyTavern chat.',
     '',
     'The schema is a JSON array of node-type definitions. Each entry describes a kind of fact the memory graph stores about the chat — characters, locations, events, relationships, etc. The runtime extracts these from the conversation and feeds them back to the writing model when relevant.',
@@ -90,6 +96,24 @@ export const DEFAULT_SCHEMA_ITER_SYSTEM_PROMPT = [
     '- Respond with plain text and no tool calls when the request is fully addressed; that ends the loop and returns control to the user.',
 ].join('\n');
 
-export function buildSystemPrompt() {
-    return DEFAULT_SCHEMA_ITER_SYSTEM_PROMPT;
+/**
+ * Runs from `ensureSettings` on boot. A root
+ * that already carries `configPromptSchemaVersion >= 1` is a no-op. A
+ * non-empty `schemaIterSystemPrompt` that differs from the retired default
+ * is copied into `configIterSystemPrompt`; the legacy key itself is not
+ * deleted. The marker is stamped in the migrating path either way, so a
+ * later reset of the new slot never lets the legacy text flow back.
+ * Returns true when this call stamped the marker, false when the root was
+ * already migrated.
+ */
+export function migrateConfigIterationPrompt(settings) {
+    if (Number(settings.configPromptSchemaVersion) >= 1) {
+        return false;
+    }
+    const legacy = String(settings.schemaIterSystemPrompt || '').trim();
+    if (legacy && legacy !== LEGACY_SCHEMA_ITER_SYSTEM_PROMPT.trim()) {
+        settings.configIterSystemPrompt = legacy;
+    }
+    settings.configPromptSchemaVersion = CONFIG_PROMPT_SCHEMA_VERSION;
+    return true;
 }

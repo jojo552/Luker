@@ -32,7 +32,7 @@
  */
 
 import { sanitizeCustomTools } from './custom-tools-sanitize.js';
-import { applyStringPatch } from './system-prompt-patch.js';
+import { applyStringPatch } from '../../iteration-library/system-prompt-patch.js';
 import { getBuiltinToolRegistry } from './loop-tools.js';
 import {
     listCtxKeys,

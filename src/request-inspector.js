@@ -4,6 +4,7 @@
 import express from 'express';
 import { randomUUID } from 'node:crypto';
 import { getConfigValue } from './util.js';
+import { ByteBudgetLedger } from './util/byte-budget.js';
 import { joinReasoningDetailsText, mergeReasoningDetails } from '../public/scripts/util/reasoning-details.js';
 
 const RING_BUFFER_SIZE = 200;
@@ -47,6 +48,19 @@ const REQUEST_INSPECTOR_CLEANUP_INTERVAL_MS = readTuningNumber(
     DEFAULT_CLEANUP_INTERVAL_MS,
     MIN_CLEANUP_INTERVAL_MS,
 );
+// Byte budget across every user's ring buffers. Entry count and TTL bound
+// records, not memory: entries carry full request/response bodies, and
+// image-bearing chats clone those bytes twice (fullMessages + wireRequest),
+// so 200 records can retain gigabytes. 256 MB ≈ 6% of Node's ~4 GB default
+// old-space keeps a full debugging session intact while capping retention.
+const DEFAULT_BYTE_BUDGET_BYTES = 256 * 1024 * 1024;
+const MIN_BYTE_BUDGET_BYTES = 16 * 1024 * 1024;
+const REQUEST_INSPECTOR_BYTE_BUDGET_BYTES = readTuningNumber(
+    'requestInspector.byteBudgetBytes',
+    DEFAULT_BYTE_BUDGET_BYTES,
+    MIN_BYTE_BUDGET_BYTES,
+);
+const inspectorLedger = new ByteBudgetLedger(REQUEST_INSPECTOR_BYTE_BUDGET_BYTES);
 
 /** @type {Map<string, InspectorEntry[]>} handle -> entries */
 const buffers = new Map();
@@ -77,9 +91,12 @@ export function getBufferForHandle(handle) {
 function pushEntry(handle, entry) {
     const buf = getBuffer(handle);
     buf.push(entry);
+    inspectorLedger.track(entry);
     if (buf.length > RING_BUFFER_SIZE) {
+        inspectorLedger.untrack(buf[0]);
         buf.shift();
     }
+    enforceByteBudget();
 }
 
 function removeEntry(handle, entry) {
@@ -90,8 +107,34 @@ function removeEntry(handle, entry) {
     if (index === -1) return false;
 
     buffer.splice(index, 1);
+    inspectorLedger.untrack(entry);
     if (buffer.length === 0) buffers.delete(handle);
     return true;
+}
+
+/**
+ * Drop the oldest evictable records until the ledger is back under the byte
+ * budget. Running records are exempt — an in-flight request must survive
+ * until its completion callback runs, same principle as ACTIVE_ENTRY_MAX_AGE
+ * — and the single newest record always survives so a record larger than the
+ * whole budget is still captured instead of silently dropped.
+ */
+function enforceByteBudget() {
+    if (!inspectorLedger.isOver()) return;
+
+    const candidates = [];
+    for (const [handle, buffer] of buffers) {
+        for (const entry of buffer) {
+            if (entry.status === 'running') continue;
+            candidates.push({ handle, entry });
+        }
+    }
+    candidates.sort((a, b) => a.entry.timestamp - b.entry.timestamp);
+
+    // `length - 1` keeps the newest evictable record.
+    for (let i = 0; i < candidates.length - 1 && inspectorLedger.isOver(); i++) {
+        removeEntry(candidates[i].handle, candidates[i].entry);
+    }
 }
 
 /**
@@ -220,6 +263,10 @@ export function attachInspectionEndpoint(request, endpoint, apiKey, wirePayload)
             try { entry.wireRequest = JSON.parse(JSON.stringify(wirePayload)); } catch { /* skip */ }
         }
     }
+    // wireRequest can dwarf the rest of the record (full bodies, inlined
+    // images) — re-estimate and evict before returning.
+    inspectorLedger.retouch(entry);
+    enforceByteBudget();
 }
 
 /**
@@ -898,6 +945,10 @@ function extractPartsFromStreamEvents(events, source) {
                 } else if (p?.functionCall) {
                     flushText();
                     parts.push({ type: 'tool_call', id: '', name: p.functionCall.name || '', args: p.functionCall.args ?? {} });
+                } else if (p?.inlineData) {
+                    // Gemini streams image output as inlineData parts.
+                    flushText();
+                    parts.push({ type: 'image', mime: p.inlineData.mimeType || '', data: p.inlineData.data || '' });
                 }
             }
         }
@@ -1131,6 +1182,10 @@ function extractPartsFromPayload(payload, source, rawApiResponse) {
                         if (p.text) parts.push({ type: 'text', text: p.text });
                     } else if (p?.functionCall) {
                         parts.push({ type: 'tool_call', id: '', name: p.functionCall.name || '', args: p.functionCall.args ?? {} });
+                    } else if (p?.inlineData) {
+                        // Gemini image output — keep the bytes so the Inspector
+                        // can render the actual image instead of dropping it.
+                        parts.push({ type: 'image', mime: p.inlineData.mimeType || '', data: p.inlineData.data || '' });
                     }
                 }
                 return parts;
@@ -1292,6 +1347,11 @@ export function completeInspection(request, payload, rawApiResponse) {
         entry.status = 'error';
         entry.error = extractProviderErrorMessage(payload.error);
     }
+
+    // responseText / responseParts can carry megabytes — re-estimate the
+    // record and evict older ones if the budget no longer holds.
+    inspectorLedger.retouch(entry);
+    enforceByteBudget();
 }
 
 /**
@@ -1336,6 +1396,9 @@ export function completeInspectionFromStream(request, events, accumulatedText) {
         entry.status = 'error';
         entry.error = extractProviderErrorMessage(providerError);
     }
+
+    inspectorLedger.retouch(entry);
+    enforceByteBudget();
 }
 
 /**
@@ -1352,6 +1415,10 @@ export function failInspection(request, errorMessage, httpStatus) {
     entry.durationMs = Date.now() - entry.timestamp;
     entry.httpStatus = httpStatus ?? null;
     entry.error = String(errorMessage || 'Unknown error');
+
+    // error strings are bounded but can still carry a whole provider body.
+    inspectorLedger.retouch(entry);
+    enforceByteBudget();
 }
 
 /**

@@ -2,6 +2,8 @@
 // Copyright (C) 2026 FunnyCups
 
 /**
+ * iteration-library — exact-anchor string patch primitive.
+ *
  * Apply a Claude-Code-Edit-shaped `{oldString, newString, replaceAll}`
  * patch to a string. Returns either:
  *   - { ok: true, nextText }      — the patch was applied
@@ -16,11 +18,15 @@
  *                           is false (default); the caller must widen
  *                           oldString with surrounding context
  *
- * Used by the orchestrator's per-agent system-prompt patch tools
- * (`luker_orch_patch_*_system_prompt`) so director / loop / agenda agents
- * share a single semantics: incremental edits instead of full rewrites,
- * with the same drift-detection guarantees the message-takeover patches
- * already give the director.
+ * Shared by every plugin that exposes an exact-anchor prompt patch tool
+ * — the orchestrator's per-agent `luker_orch_patch_*_system_prompt`
+ * tools (director / loop / agenda) and the memory-graph config prompt
+ * patch tool — so they all share a single semantics: incremental edits
+ * instead of full rewrites, with the same drift-detection guarantees
+ * the message-takeover patches already give the director.
+ *
+ * Moved here from `extensions/orchestrator/system-prompt-patch.js` so
+ * plugins outside the orchestrator do not import one another.
  */
 export function applyStringPatch(currentText, { oldString, newString, replaceAll = false } = {}) {
     if (typeof oldString !== 'string' || oldString.length === 0) {

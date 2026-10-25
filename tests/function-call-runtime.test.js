@@ -3,6 +3,8 @@ import { describe, expect, test } from '@jest/globals';
 import {
     buildFunctionCallRetryAddendum,
     buildPlainTextToolProtocolMessage,
+    extractAllFunctionCallsFromText,
+    extractDisplayTextFromPlainTextFunctionResponse,
     isToolCallMandatory,
     resolveFunctionCallMode,
     TOOL_PROTOCOL_STYLE,
@@ -120,5 +122,91 @@ describe('resolveFunctionCallMode', () => {
         expect(resolveFunctionCallMode({ plainTextEnabled: false })).toBe('native');
         expect(resolveFunctionCallMode({ requestedMode: '', plainTextEnabled: true })).toBe('prompt_xml');
         expect(resolveFunctionCallMode()).toBe('native');
+    });
+});
+
+describe('extractAllFunctionCallsFromText', () => {
+    const TRIGGER = '<Function_Tst1_Start/>';
+
+    function makeResponse(content) {
+        return { choices: [{ message: { role: 'assistant', content } }] };
+    }
+
+    test('parses calls from a trigger-scoped <function_calls> payload', () => {
+        const content = [
+            'Let me check that.',
+            TRIGGER,
+            '<function_calls>',
+            '  <function_call>',
+            '    <tool>lookup_facts</tool>',
+            '    <args_json><![CDATA[{"query":"alpha"}]]></args_json>',
+            '  </function_call>',
+            '</function_calls>',
+        ].join('\n');
+        const calls = extractAllFunctionCallsFromText(makeResponse(content), null, {
+            triggerSignal: TRIGGER,
+            triggerRequired: true,
+        });
+        expect(calls).toHaveLength(1);
+        expect(calls[0].name).toBe('lookup_facts');
+        expect(calls[0].args).toEqual({ query: 'alpha' });
+    });
+
+    test('a trigger-less response stays classified as no-tool even when it contains a <function_calls> payload', () => {
+        // The trigger signal is the sole intent marker of the strict
+        // plain-text contract; a payload without it is a protocol
+        // violation the caller sees as an ordinary text reply — the
+        // payload must not be executed.
+        const content = [
+            '<function_calls>',
+            '  <function_call>',
+            '    <tool>lookup_facts</tool>',
+            '    <args_json><![CDATA[{"query":"alpha"}]]></args_json>',
+            '  </function_call>',
+            '</function_calls>',
+        ].join('\n');
+        expect(() => extractAllFunctionCallsFromText(makeResponse(content), null, {
+            triggerSignal: TRIGGER,
+            triggerRequired: true,
+        })).toThrow('Model text output did not include the required trigger signal.');
+    });
+});
+
+describe('extractDisplayTextFromPlainTextFunctionResponse', () => {
+    const TRIGGER = '<Function_Tst1_Start/>';
+
+    test('returns the preamble before the trigger when the trigger is present', () => {
+        const payload = [
+            '<function_calls>',
+            '  <function_call>',
+            '    <tool>lookup_facts</tool>',
+            '  </function_call>',
+            '</function_calls>',
+        ].join('\n');
+        const source = `Answer text.\n${TRIGGER}\n${payload}`;
+        expect(extractDisplayTextFromPlainTextFunctionResponse(source, { triggerSignal: TRIGGER }))
+            .toBe('Answer text.');
+    });
+
+    test('returns trigger-less text verbatim, keeping an unparsed <function_calls> payload visible', () => {
+        // If the pipeline did not parse the payload as tool calls, it has
+        // no business removing it from the visible reply: the model's
+        // protocol violation must stay 1:1 in the assistant text.
+        const source = [
+            'About to edit the preset.',
+            '<function_calls>',
+            '  <function_call>',
+            '    <tool>apply_edits</tool>',
+            '    <args_json><![CDATA[{"edits":[]}]]></args_json>',
+            '  </function_call>',
+            '</function_calls>',
+        ].join('\n');
+        expect(extractDisplayTextFromPlainTextFunctionResponse(source, { triggerSignal: TRIGGER }))
+            .toBe(source);
+    });
+
+    test('returns plain prose unchanged', () => {
+        expect(extractDisplayTextFromPlainTextFunctionResponse('Just a normal reply.', { triggerSignal: TRIGGER }))
+            .toBe('Just a normal reply.');
     });
 });

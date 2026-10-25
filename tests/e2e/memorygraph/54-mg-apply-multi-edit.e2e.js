@@ -227,7 +227,7 @@ test.describe('#54 — MG schema-iter Studio: 5 set-node-type rounds land every 
 
         // Cross-check via settings before opening the editor: the event
         // node type's tableColumns should now include all 5 new fields.
-        // The studio's commitLiveToSchema writes to the active character's
+        // The studio's commitLiveToConfig writes to the active character's
         // schemaOverride when one is selected (Seraphina here), so read
         // the per-character override path first and fall back to global.
         const persistedColumns = await page.evaluate(() => {

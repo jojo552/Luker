@@ -95,8 +95,8 @@ jest.unstable_mockModule('../../public/scripts/extensions.js', () => ({
     registerExtensionApi: () => {},
     UNSET_VALUE: Symbol('UNSET_VALUE'),
 }));
-jest.unstable_mockModule('../../public/scripts/extensions/memory-graph/schema-iteration/studio.js', () => ({
-    openSchemaIterationStudio: () => Promise.resolve(),
+jest.unstable_mockModule('../../public/scripts/extensions/memory-graph/config-iteration/studio.js', () => ({
+    openConfigIterationStudio: () => Promise.resolve(),
 }));
 // graph-iteration/studio.js is the sibling studio boundary wired into
 // main.js (its iteration-library chain reaches public/lib.js, which has no

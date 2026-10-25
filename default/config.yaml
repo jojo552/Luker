@@ -371,6 +371,13 @@ requestInspector:
   # How often (in milliseconds) the expiry sweeper runs. A record survives at
   # most ttlMs + cleanupIntervalMs past its deadline.
   cleanupIntervalMs: 300000
+  # Soft cap on the heap bytes retained by request-inspector records across
+  # all users. Records carry full request and response bodies, and chats with
+  # inlined images hold those bytes twice (pre- and post-conversion copies), so
+  # the entry-count cap alone cannot bound memory. When the cap is exceeded
+  # the oldest completed records are evicted first; running requests always
+  # survive. 256 MB is ~6% of Node's ~4 GB default old-space heap.
+  byteBudgetBytes: 268435456
 # -- OPENAI CONFIGURATION --
 # A placeholder message to use in strict prompt post-processing mode when the prompt doesn't start with a user message
 promptPlaceholder: "[Start a new chat]"

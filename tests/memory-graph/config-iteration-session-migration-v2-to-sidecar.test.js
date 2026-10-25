@@ -1,6 +1,6 @@
 import { describe, test, expect, jest } from '@jest/globals';
-import { migrateMgSchemaSessionsV2ToSidecar, MG_MIGRATION_FLAG_KEY } from '../../public/scripts/extensions/memory-graph/schema-iteration/session-migration-v2-to-sidecar.js';
-import { MG_GLOBAL_BUCKET_KEY } from '../../public/scripts/extensions/memory-graph/schema-iteration/session-store.js';
+import { migrateMgSchemaSessionsV2ToSidecar, MG_MIGRATION_FLAG_KEY } from '../../public/scripts/extensions/memory-graph/config-iteration/session-migration-v2-to-sidecar.js';
+import { MG_GLOBAL_BUCKET_KEY } from '../../public/scripts/extensions/memory-graph/config-iteration/session-store.js';
 
 describe('migrateMgSchemaSessionsV2ToSidecar', () => {
     test('flat V2 sessions go into the global bucket (MG never had per-char scope in V2)', async () => {

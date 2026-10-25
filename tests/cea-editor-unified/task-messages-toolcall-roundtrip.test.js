@@ -11,7 +11,7 @@
 // approvals, and discard-flow post-review rejects the still-pending
 // tool_result envelopes in place.
 //
-// Mirrors tests/mg-schema-iteration/task-messages-toolcall-roundtrip.test.js
+// Mirrors tests/mg-config-iteration/task-messages-toolcall-roundtrip.test.js
 // but adds CEA-specific describes for:
 //   - CEA's TWO bus proposal kinds (cea-character-edits +
 //     cea-lorebook-edits) — both must trigger the sibling-pending

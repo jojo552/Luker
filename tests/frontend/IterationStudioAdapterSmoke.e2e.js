@@ -178,7 +178,7 @@ test.describe('UI-driven iter-studio adapter smoke', () => {
                 openButton: '#luker_rpg_memory_open_schema_studio',
                 // MG schema iteration migrated off the shared iter-
                 // studio shell to a plugin-owned popup
-                // (`schema-iteration/studio.js`). The popup root no longer
+                // (`config-iteration/studio.js`). The popup root no longer
                 // carries `.luker-studio` — it's a top-level
                 // `.mg_schema_it_popup` div mounted inside ST's `Popup`
                 // wrapper, and the new-session button uses

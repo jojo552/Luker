@@ -1226,6 +1226,7 @@ export async function initRossMods() {
 
         if (event.key == 'ArrowLeft') {        //swipes left
             if (
+                power_user.arrow_key_swipes &&
                 isSwipingAllowed() &&
                 !isNanogallery2LightboxActive() &&  // Check if lightbox is NOT active
                 $('#send_textarea').val() === '' &&
@@ -1241,6 +1242,7 @@ export async function initRossMods() {
         }
         if (event.key == 'ArrowRight') { //swipes right
             if (
+                power_user.arrow_key_swipes &&
                 isSwipingAllowed() &&
                 !isNanogallery2LightboxActive() &&  // Check if lightbox is NOT active
                 $('#send_textarea').val() === '' &&

@@ -3064,6 +3064,11 @@
                                         </div>
                                     </div>
                                 </div>
+                                <div id="reverse_proxy_conflict_warning" class="reverse_proxy_conflict_warning">
+                                    <b data-i18n="Base URL and a legacy Proxy Server URL are both set. The proxy URL takes precedence and Base URL is ignored.">
+                                        Base URL and a legacy Proxy Server URL are both set. The proxy URL takes precedence and Base URL is ignored.
+                                    </b>
+                                </div>
                             </div>
                         </div>
                         <div id="ReverseProxyWarningMessage" data-source="openai,claude,mistralai,makersuite,vertexai,deepseek,xai,zai,moonshot">
@@ -5709,10 +5714,15 @@
                                         <input id="swipes-checkbox" type="checkbox" />
                                         <small data-i18n="Swipes">Swipes</small><i class="fa-solid fa-desktop"></i><i class="fa-solid fa-mobile-screen-button"></i>
                                     </label>
-                                    <label class="checkbox_label" for="gestures-checkbox" title="Allow using swiping gestures on the last in-chat message to trigger swipe generation. Mobile only, no effect on PC." , data-i18n="[title]Allow using swiping gestures on the last in-chat message to trigger swipe generation. Mobile only, no effect on PC">
+                                    <label class="checkbox_label" for="gestures-checkbox" title="Swipe the last message to generate another reply." data-i18n="[title]Swipe the last message to generate another reply.">
                                         <input id="gestures-checkbox" type="checkbox" />
-                                        <small data-i18n="Gestures">Gestures</small>
+                                        <small data-i18n="Swipe gestures">Swipe gestures</small>
                                         <i class="fa-solid fa-mobile-screen-button"></i>
+                                    </label>
+                                    <label class="checkbox_label" for="arrow-key-swipes" title="Use the left and right arrow keys to swipe the last message." data-i18n="[title]Use the left and right arrow keys to swipe the last message.">
+                                        <input id="arrow-key-swipes" type="checkbox" />
+                                        <small data-i18n="Arrow key swipes">Arrow key swipes</small>
+                                        <i class="fa-solid fa-desktop"></i>
                                     </label>
                                 </div>
                                 <label class="checkbox_label" for="auto-load-chat-checkbox">

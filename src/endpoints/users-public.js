@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 
 import storage from 'node-persist';
+import bodyParser from 'body-parser';
 import express from 'express';
 import { RateLimiterMemory, RateLimiterRes } from 'rate-limiter-flexible';
 import { getIpAddress, retryAfter } from '../express-common.js';
@@ -21,6 +22,23 @@ const OAUTH_STATE_CACHE = new Cache(10 * 60 * 1000);
 const generateRecoveryCode = () => Array.from({ length: 6 }, () => crypto.randomInt(0, 10)).join('');
 
 export const router = express.Router();
+
+// Body parsing for the pre-authentication surface is size-capped: only
+// the account bootstrap routes in this router are reachable before the
+// login gate, and their payloads (handle / name / password) are a few
+// hundred bytes. body-parser's default 100kb limit bounds what an
+// unauthenticated client can make the process buffer before Basic Auth,
+// the IP whitelist, host validation, and the account login gate reject
+// the request. The parsers are attached per route rather than with
+// `router.use`: this router is mounted at /api/users ahead of the login
+// gate, and users-private / users-admin mount at the same prefix behind
+// it, so a router-wide parser would also cap their large payloads (avatar
+// data URLs, backups) at 100kb.
+const parseAccountBody = [
+    bodyParser.json({ limit: '100kb' }),
+    bodyParser.urlencoded({ extended: true, limit: '100kb' }),
+];
+
 const loginLimiter = new RateLimiterMemory({
     points: LOGIN_POINTS > 0 ? LOGIN_POINTS : Number.MAX_SAFE_INTEGER,
     duration: 60,
@@ -307,7 +325,7 @@ router.get('/transfer/backup/:token', async (request, response) => {
     }
 });
 
-router.post('/oauth/providers', async (_request, response) => {
+router.post('/oauth/providers', parseAccountBody, async (_request, response) => {
     try {
         const settings = await getAdminSettings();
         const providers = {
@@ -322,7 +340,7 @@ router.post('/oauth/providers', async (_request, response) => {
     }
 });
 
-router.post('/registration/info', async (_request, response) => {
+router.post('/registration/info', parseAccountBody, async (_request, response) => {
     try {
         const settings = await getAdminSettings();
         return response.json({ enabled: Boolean(settings?.accountRegistration?.enabled) });
@@ -332,7 +350,7 @@ router.post('/registration/info', async (_request, response) => {
     }
 });
 
-router.post('/register', async (request, response) => {
+router.post('/register', parseAccountBody, async (request, response) => {
     try {
         const settings = await getAdminSettings();
         if (!settings?.accountRegistration?.enabled) {
@@ -599,7 +617,7 @@ router.get('/oauth/callback/:provider', async (request, response) => {
     }
 });
 
-router.post('/list', async (_request, response) => {
+router.post('/list', parseAccountBody, async (_request, response) => {
     try {
         if (DISCREET_LOGIN) {
             return response.sendStatus(204);
@@ -633,7 +651,7 @@ router.post('/list', async (_request, response) => {
     }
 });
 
-router.post('/login', async (request, response) => {
+router.post('/login', parseAccountBody, async (request, response) => {
     try {
         if (!request.body.handle) {
             console.warn('Login failed: Missing required fields');
@@ -694,7 +712,7 @@ router.post('/login', async (request, response) => {
     }
 });
 
-router.post('/recover-step1', async (request, response) => {
+router.post('/recover-step1', parseAccountBody, async (request, response) => {
     try {
         if (!request.body.handle) {
             console.warn('Recover step 1 failed: Missing required fields');
@@ -734,7 +752,7 @@ router.post('/recover-step1', async (request, response) => {
     }
 });
 
-router.post('/recover-step2', async (request, response) => {
+router.post('/recover-step2', parseAccountBody, async (request, response) => {
     try {
         if (!request.body.handle || !request.body.code) {
             console.warn('Recover step 2 failed: Missing required fields');

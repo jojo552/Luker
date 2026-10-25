@@ -99,7 +99,7 @@ export const LOOP_ITERATION_CONTRACT_LINES = Object.freeze([
  *   - present + wrong   → throw `invalid_args` so the executor can
  *                         surface a real `{ok:false, error, detail}`
  *                         tool reply (mirrors the anchor-patch contract
- *                         in system-prompt-patch.js)
+ *                         in iteration-library/system-prompt-patch.js)
  *
  * Without the throw the typeof guard used to silently fall back to the
  * current value, the executor reported `{ok:true, changed:false}`, and

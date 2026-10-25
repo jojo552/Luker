@@ -15,7 +15,7 @@ tests/e2e/
 ├── character/      #15–#24  Character / Card App (import, edit, avatar, duplicate, delete cascade, dynamic WI)
 ├── worldinfo/      #25–#32  World Info (5 activation strategies, cache trim, bindings, recursion, vectors)
 ├── preset/         #33–#38  Preset / CPA (save/switch, export/import, character binding, Apply→Global, patch threshold)
-├── server/         #39–#51  Connection profiles, multi-backend, uploads self-heal, multi-user, basicAuth, attachments
+├── server/         #39–#54  Connection profiles, multi-backend, uploads self-heal, multi-user, basicAuth, attachments
 ├── memorygraph/    #52–#60  Memory Graph (extract, persistence, branch isolation, schema, vector index, read-api)
 ├── varops/         #61–#66  var_ops / floor-state (multi-mutation, rollback, persist, malformed handling, op log)
 ├── orchestrator/   #67–#78  Director / Run Panel / spec→agenda→loop / critic / per-run tools / capsule / abort

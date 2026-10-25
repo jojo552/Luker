@@ -7,7 +7,7 @@
 // place instead of pushing a synthetic `[User reviewed N proposal(s):
 // ...]` user message.
 //
-// Mirrors tests/mg-schema-iteration/task-messages-toolcall-roundtrip.test.js
+// Mirrors tests/mg-config-iteration/task-messages-toolcall-roundtrip.test.js
 // but adds CPA-specific coverage for the THREE bus proposal kinds CPA
 // exposes:
 //   - `profile-edit`: N chained `preset_*` edit calls per turn collapse
