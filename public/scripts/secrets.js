@@ -1,5 +1,5 @@
 import { DOMPurify, moment, sha256 } from '../lib.js';
-import { event_types, eventSource, getRequestHeaders, isRunningInLukerHarmonyApp, saveSettings } from '../script.js';
+import { event_types, eventSource, getRequestHeaders, isRunningInLukerAndroidApp, isRunningInLukerHarmonyApp, saveSettings } from '../script.js';
 import { t } from './i18n.js';
 import { chat_completion_sources } from './openai.js';
 import { callGenericPopup, Popup, POPUP_RESULT, POPUP_TYPE } from './popup.js';
@@ -649,10 +649,11 @@ export async function checkOpenRouterAuth() {
  * Updates the input data lists for secret keys for autocomplete functionality.
  */
 function updateInputDataLists() {
-    // The HarmonyOS WebView draws datalist suggestions as a full-screen list of
+    // The native app shells draw datalist suggestions as a full-screen list of
     // opaque secret ids that covers the input. Skip the autosuggest there; saved
-    // keys are picked from the key manager dialog instead.
-    if (isRunningInLukerHarmonyApp()) {
+    // keys are picked from the key manager dialog instead. Mobile web browsers
+    // keep it.
+    if (isRunningInLukerAndroidApp() || isRunningInLukerHarmonyApp()) {
         return;
     }
 

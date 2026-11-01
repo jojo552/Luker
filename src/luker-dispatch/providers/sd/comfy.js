@@ -303,9 +303,10 @@ export async function dispatchSdComfy(ctx) {
         }
         const format = path.extname(imgInfo.filename).slice(1).toLowerCase() || 'png';
         const imgBuffer = await imgResponse.arrayBuffer();
-        ctx.inspection.completeImage({ format, sizeBytes: imgBuffer.byteLength });
+        const imageData = Buffer.from(imgBuffer).toString('base64');
+        ctx.inspection.completeImage({ format, sizeBytes: imgBuffer.byteLength, data: imageData });
 
-        const payload = { format, data: Buffer.from(imgBuffer).toString('base64') };
+        const payload = { format, data: imageData };
         const encoder = new TextEncoder();
         ctx.emit.chunk(encoder.encode(JSON.stringify(payload)));
         ctx.emit.end();

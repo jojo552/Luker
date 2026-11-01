@@ -171,7 +171,7 @@ export async function dispatchSdBfl(ctx) {
                 const fetchResult = await ctx.fetch(sample, { signal: ctx.signal });
                 const fetchData = await fetchResult.arrayBuffer();
                 const image = Buffer.from(fetchData).toString('base64');
-                ctx.inspection.completeImage({ format: 'jpeg', sizeBytes: fetchData.byteLength });
+                ctx.inspection.completeImage({ format: 'jpeg', data: image });
 
                 const encoder = new TextEncoder();
                 ctx.emit.chunk(encoder.encode(JSON.stringify({ image })));

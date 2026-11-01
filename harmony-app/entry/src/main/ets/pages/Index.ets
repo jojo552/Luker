@@ -14,15 +14,26 @@ import { exportTo } from '../crash/DiagnosticsExporter';
 import { writeArkWebExit } from '../crash/CrashCapture';
 import { LastExit } from '../crash/LastExit';
 import { KeepAliveManager, LukerHarmonyBridge } from '../KeepAliveManager';
-import { ExternalLinkSettings, LinkRoute, routeNewWindow, routeTopLevelNavigation } from '../ExternalLinkPolicy';
+import { ExternalLinkSettings, LinkRoute, originOf, routeNewWindow, routeTopLevelNavigation } from '../ExternalLinkPolicy';
 import { FileSelectionPlan, MediaKind, planFileSelection } from '../FileSelectionPlanner';
 import { BusinessError } from '@kit.BasicServicesKit';
+import { AppConfig } from '../AppConfig';
+import { DEFAULT_LOCAL_BASE_URL, isLocalBaseUrl, normalizeCustomBaseUrl } from '../EndpointUrl';
+import { RuntimeNotification } from '../RuntimeNotification';
+import {
+  ACTION_OPEN_ENDPOINT_SETTINGS,
+  ACTION_RELOAD_WEBVIEW,
+} from '../AppActions';
 
 const TAG: string = 'luker.Index';
 const DOMAIN: number = 0xE1EC;
-const SERVER_URL: string = 'http://127.0.0.1:8000';
 const BOOT_TIMEOUT_MS: number = 120_000;
 const CONFIRM_EXIT_WINDOW_MS: number = 2000;
+
+interface ProbeResult {
+  ok: boolean;
+  error: string;
+}
 
 @Entry
 @Component
@@ -31,6 +42,9 @@ struct Index {
   private bridge: LukerHarmonyBridge = new LukerHarmonyBridge();
   @State serverReady: boolean = false;
   @State statusMessage: string = '';
+  @StorageLink('luker.serverUrl') serverUrl: string = DEFAULT_LOCAL_BASE_URL;
+  @StorageLink('luker.customEndpoint') customEndpoint: boolean = false;
+  @StorageLink('luker.pendingAction') @Watch('onPendingAction') pendingAction: string = '';
   private exporting: boolean = false;
   private crashDialogDone: boolean = false;
   private saveTargets: Map<string, string> = new Map<string, string>();
@@ -38,8 +52,19 @@ struct Index {
   private lastExitPressAt: number = 0;
   private popupDialogController: CustomDialogController | null = null;
   private popupDialogToken: number = 0;
+  private endpointDialogController: CustomDialogController | null = null;
+  private endpointDialogToken: number = 0;
+  private reloadWhenReady: boolean = false;
+  private controllerAttached: boolean = false;
+  private pageShown: boolean = false;
+  private pendingEndpointDialog: boolean = false;
+  private startToken: number = 0;
 
   aboutToAppear(): void {
+    if (AppConfig.warning().length > 0) {
+      promptAction.showToast({ message: this.res($r('app.string.endpoint_config_failed').id) });
+    }
+    const launchAction: string = this.pendingAction;
     this.statusMessage = this.res($r('app.string.starting_engine').id, '0s');
     let dialogShown: boolean = false;
     try {
@@ -48,8 +73,21 @@ struct Index {
       hilog.error(DOMAIN, TAG, 'checkPendingCrash failed: %{public}s', JSON.stringify(e));
     }
     if (!dialogShown) {
+      this.onPendingAction();
+      if (this.customEndpoint && launchAction.length === 0) {
+        this.requestEndpointDialog();
+      }
       this.start();
     }
+  }
+
+  onPageShow(): void {
+    this.pageShown = true;
+    this.openPendingEndpointDialog();
+  }
+
+  onPageHide(): void {
+    this.pageShown = false;
   }
 
   private res(id: number, arg?: string): string {
@@ -122,46 +160,89 @@ struct Index {
     // crash that arrives later carries an earlier time and stays acknowledged.
     acknowledge(this.crashFilesDir(), Date.now());
     LastExit.deferBackend = false;
+    const launchAction: string = this.pendingAction;
     this.start();
+    this.onPendingAction();
+    if (this.customEndpoint && launchAction.length === 0) {
+      this.requestEndpointDialog();
+    }
   }
 
   async start(): Promise<void> {
+    const token: number = ++this.startToken;
+    const serverUrl: string = this.serverUrl;
+    const customEndpoint: boolean = this.customEndpoint;
+    const readyLimit: number = customEndpoint ? 400 : 500;
+    let lastProbeError: string = '';
+    this.statusMessage = this.res($r('app.string.starting_engine').id, '0s');
     const context = getContext(this) as common.UIAbilityContext;
-    if (!BackendManager.launchAttempted) {
+    if (!customEndpoint && !BackendManager.launchAttempted) {
       launchInProcessEarly(context);
     }
     const startedAt: number = Date.now();
     while (Date.now() - startedAt < BOOT_TIMEOUT_MS) {
-      if (await this.probe()) {
-        this.serverReady = true;
+      if (token !== this.startToken) {
         return;
       }
-      const secs: number = Math.round((Date.now() - startedAt) / 1000);
-      const status: string = getBackendStatusSafe();
-      this.statusMessage =
-        this.res($r('app.string.starting_engine').id, `${secs}s`) + '\n' +
-        this.res($r('app.string.backend_status').id, status);
-      if (status.startsWith('failed:')) {
-        this.statusMessage = this.res($r('app.string.engine_failed').id, status);
+      const result: ProbeResult = await this.probe(serverUrl, readyLimit);
+      if (token !== this.startToken) {
         return;
+      }
+      if (result.ok) {
+        this.serverReady = true;
+        RuntimeNotification.setServerReady(true);
+        return;
+      }
+      lastProbeError = result.error;
+      const secs: number = Math.round((Date.now() - startedAt) / 1000);
+      if (customEndpoint) {
+        let message: string = this.res($r('app.string.starting_engine').id, `${secs}s`);
+        if (lastProbeError.length > 0) {
+          message += '\n' + this.res($r('app.string.endpoint_probe_failed').id, lastProbeError);
+        }
+        this.statusMessage = message;
+      } else {
+        const status: string = getBackendStatusSafe();
+        this.statusMessage =
+          this.res($r('app.string.starting_engine').id, `${secs}s`) + '\n' +
+          this.res($r('app.string.backend_status').id, status);
+        if (status.startsWith('failed:')) {
+          this.statusMessage = this.res($r('app.string.engine_failed').id, status);
+          return;
+        }
       }
       await this.sleep(200);
     }
-    this.statusMessage = this.res($r('app.string.engine_timeout').id);
+    if (token !== this.startToken) {
+      return;
+    }
+    if (customEndpoint) {
+      let message: string = this.res($r('app.string.endpoint_timeout').id);
+      if (lastProbeError.length > 0) {
+        message += '\n' + this.res($r('app.string.endpoint_probe_failed').id, lastProbeError);
+      }
+      this.statusMessage = message;
+    } else {
+      this.statusMessage = this.res($r('app.string.engine_timeout').id);
+    }
   }
 
-  async probe(): Promise<boolean> {
+  async probe(url: string, readyLimit: number): Promise<ProbeResult> {
     const client = http.createHttp();
     try {
-      const resp = await client.request(SERVER_URL, {
+      const resp = await client.request(url, {
         method: http.RequestMethod.GET,
         connectTimeout: 3000,
         readTimeout: 3000,
         usingCache: false
       });
-      return resp.responseCode >= 200 && resp.responseCode < 500;
-    } catch {
-      return false;
+      if (resp.responseCode >= 200 && resp.responseCode < readyLimit) {
+        return { ok: true, error: '' };
+      }
+      return { ok: false, error: `HTTP ${resp.responseCode}` };
+    } catch (e) {
+      const err: BusinessError = e as BusinessError;
+      return { ok: false, error: err.message ? `${err.code}: ${err.message}` : String(e) };
     } finally {
       client.destroy();
     }
@@ -169,6 +250,116 @@ struct Index {
 
   sleep(ms: number): Promise<void> {
     return new Promise<void>((resolve) => setTimeout(() => resolve(), ms));
+  }
+
+  private onPendingAction(): void {
+    const action: string = this.pendingAction;
+    if (action.length === 0) {
+      return;
+    }
+    this.pendingAction = '';
+    if (action === ACTION_OPEN_ENDPOINT_SETTINGS) {
+      this.requestEndpointDialog();
+    } else if (action === ACTION_RELOAD_WEBVIEW) {
+      this.reloadWeb();
+    }
+  }
+
+  private requestEndpointDialog(): void {
+    this.pendingEndpointDialog = true;
+    this.openPendingEndpointDialog();
+  }
+
+  private openPendingEndpointDialog(): void {
+    if (!this.pendingEndpointDialog || !this.pageShown) {
+      return;
+    }
+    this.pendingEndpointDialog = false;
+    this.openEndpointDialog();
+  }
+
+  private reloadWeb(): void {
+    if (!this.serverReady || !this.controllerAttached) {
+      this.reloadWhenReady = true;
+      return;
+    }
+    try {
+      this.controller.refresh();
+    } catch (e) {
+      hilog.error(DOMAIN, TAG, 'refresh failed: %{public}s', JSON.stringify(e));
+      try {
+        this.controller.loadUrl(this.serverUrl);
+      } catch (reloadError) {
+        hilog.error(DOMAIN, TAG, 'reload after refresh failure failed: %{public}s',
+          JSON.stringify(reloadError));
+      }
+    }
+  }
+
+  private openEndpointDialog(): void {
+    if (this.endpointDialogController !== null) {
+      return;
+    }
+    this.closePopupDialog();
+    const token: number = ++this.endpointDialogToken;
+    const dialogController: CustomDialogController = new CustomDialogController({
+      builder: EndpointDialog({
+        initialUrl: AppConfig.customBaseUrl() ?? '',
+        currentUrl: this.serverUrl,
+        usesCustom: this.customEndpoint,
+        onSave: (url: string) => this.applyEndpoint(url),
+        onReset: () => this.applyEndpoint(null),
+        onClosed: () => {
+          if (this.endpointDialogToken === token) {
+            this.endpointDialogController = null;
+          }
+        },
+      }),
+      autoCancel: true,
+      customStyle: true,
+    });
+    try {
+      dialogController.open();
+      this.endpointDialogController = dialogController;
+    } catch (e) {
+      hilog.error(DOMAIN, TAG, 'endpoint dialog open failed: %{public}s', JSON.stringify(e));
+      promptAction.showToast({ message: this.res($r('app.string.endpoint_dialog_failed').id) });
+    }
+  }
+
+  private applyEndpoint(customBaseUrl: string | null): boolean {
+    try {
+      if (customBaseUrl === null) {
+        AppConfig.resetCustomBaseUrl();
+      } else {
+        AppConfig.saveCustomBaseUrl(customBaseUrl);
+      }
+    } catch (e) {
+      hilog.error(DOMAIN, TAG, 'endpoint save failed: %{public}s', JSON.stringify(e));
+      promptAction.showToast({ message: this.res($r('app.string.endpoint_save_failed').id) });
+      return false;
+    }
+    const nextUrl: string = customBaseUrl ?? DEFAULT_LOCAL_BASE_URL;
+    const nextCustom: boolean = customBaseUrl !== null;
+    promptAction.showToast({
+      message: this.res(customBaseUrl === null
+        ? $r('app.string.endpoint_reset_done').id
+        : $r('app.string.endpoint_saved').id)
+    });
+    if (nextUrl === this.serverUrl && nextCustom === this.customEndpoint) {
+      return true;
+    }
+    this.closePopupDialog();
+    KeepAliveManager.release();
+    RuntimeNotification.setServerReady(false);
+    RuntimeNotification.setKeepAliveActive(false);
+    this.serverUrl = nextUrl;
+    this.customEndpoint = nextCustom;
+    this.controller = new webview.WebviewController();
+    this.serverReady = false;
+    this.controllerAttached = false;
+    this.start();
+    return true;
   }
 
   onBackPress(): boolean {
@@ -360,7 +551,7 @@ struct Index {
     const route: LinkRoute = routeNewWindow(
       target,
       event.isAlert === true,
-      SERVER_URL,
+      originOf(this.serverUrl),
       openExternally,
     );
     hilog.info(DOMAIN, TAG, 'new window: alert=%{public}s policy=%{public}d external=%{public}s route=%{public}d',
@@ -414,7 +605,7 @@ struct Index {
   build() {
     Stack() {
       if (this.serverReady) {
-        Web({ src: SERVER_URL, controller: this.controller })
+        Web({ src: this.serverUrl, controller: this.controller })
           .width('100%')
           .height('100%')
           .javaScriptAccess(true)
@@ -439,7 +630,8 @@ struct Index {
             }
             const target: string = request.getRequestUrl();
             if (routeTopLevelNavigation(
-              target, this.controller.getUrl(), SERVER_URL, ExternalLinkSettings.isOpenExternally(),
+              target, this.controller.getUrl(), originOf(this.serverUrl),
+              ExternalLinkSettings.isOpenExternally(),
             ) === LinkRoute.SystemBrowser) {
               this.bridge.openExternalUrl(target);
               return true;
@@ -450,7 +642,12 @@ struct Index {
             this.handleNewWindow(event);
           })
           .onControllerAttached(() => {
+            this.controllerAttached = true;
             this.setupDownloads();
+            if (this.reloadWhenReady) {
+              this.reloadWhenReady = false;
+              this.reloadWeb();
+            }
           })
           // A reload or renderer exit drops the page's generation state and
           // leaves any popup on top of a page that no longer opened it, so the
@@ -487,6 +684,16 @@ struct Index {
             .fontColor('#8b93a7')
             .textAlign(TextAlign.Center)
             .padding({ left: 24, right: 24 })
+          Text(this.serverUrl)
+            .fontSize(11)
+            .fontColor('#5c6370')
+            .textAlign(TextAlign.Center)
+            .padding({ left: 24, right: 24 })
+          Button($r('app.string.endpoint_settings'))
+            .fontSize(13)
+            .fontColor('#4aa3ff')
+            .backgroundColor(Color.Transparent)
+            .onClick(() => this.openEndpointDialog())
         }
         .width('100%')
         .height('100%')
@@ -574,6 +781,122 @@ function mediaMimeType(kind: MediaKind): photoAccessHelper.PhotoViewMIMETypes {
       return photoAccessHelper.PhotoViewMIMETypes.VIDEO_TYPE;
     default:
       return photoAccessHelper.PhotoViewMIMETypes.IMAGE_VIDEO_TYPE;
+  }
+}
+
+/**
+ * Endpoint selector. The custom field is empty by default; Reset to default is
+ * a separate action so an empty field cannot silently change the endpoint.
+ */
+@CustomDialog
+struct EndpointDialog {
+  controller?: CustomDialogController;
+  initialUrl: string = '';
+  currentUrl: string = '';
+  usesCustom: boolean = false;
+  onSave?: (url: string) => boolean;
+  onReset?: () => boolean;
+  onClosed?: () => void;
+  @State input: string = '';
+  @State error: string = '';
+
+  aboutToAppear(): void {
+    this.input = this.initialUrl;
+  }
+
+  aboutToDisappear(): void {
+    this.onClosed?.();
+  }
+
+  private save(): void {
+    if (this.input.trim().length === 0) {
+      this.error = this.res($r('app.string.endpoint_required').id);
+      return;
+    }
+    const normalized: string | null = normalizeCustomBaseUrl(this.input);
+    if (normalized === null) {
+      this.error = this.res($r('app.string.endpoint_invalid_url').id);
+      return;
+    }
+    if (isLocalBaseUrl(normalized)) {
+      if (this.onReset?.() === false) {
+        return;
+      }
+      this.controller?.close();
+      return;
+    }
+    if (this.onSave?.(normalized) === false) {
+      return;
+    }
+    this.controller?.close();
+  }
+
+  private res(id: number, arg?: string): string {
+    const mgr = getContext(this).resourceManager;
+    return arg === undefined ? mgr.getStringSync(id) : mgr.getStringSync(id, arg);
+  }
+
+  build() {
+    Column({ space: 12 }) {
+      Text($r('app.string.endpoint_dialog_title'))
+        .fontSize(18)
+        .fontWeight(FontWeight.Bold)
+        .fontColor('#cfd6e4')
+        .width('100%')
+      Text(this.usesCustom
+        ? this.res($r('app.string.endpoint_dialog_current_custom').id, this.currentUrl)
+        : this.res($r('app.string.endpoint_dialog_current_local').id))
+        .fontSize(12)
+        .fontColor('#8b93a7')
+        .width('100%')
+      Text($r('app.string.endpoint_dialog_message'))
+        .fontSize(12)
+        .fontColor('#8b93a7')
+        .width('100%')
+      TextInput({ text: this.input, placeholder: $r('app.string.endpoint_dialog_hint') })
+        .width('100%')
+        .fontColor('#cfd6e4')
+        .placeholderColor('#5c6370')
+        .backgroundColor('#232830')
+        .onChange((value: string) => {
+          this.input = value;
+          this.error = '';
+        })
+      if (this.error.length > 0) {
+        Text(this.error)
+          .fontSize(12)
+          .fontColor('#ff6b6b')
+          .width('100%')
+      }
+      Row({ space: 8 }) {
+        Button($r('app.string.endpoint_dialog_cancel'))
+          .fontSize(13)
+          .fontColor('#8b93a7')
+          .backgroundColor(Color.Transparent)
+          .onClick(() => this.controller?.close())
+        Button($r('app.string.endpoint_dialog_reset'))
+          .fontSize(13)
+          .fontColor('#cfd6e4')
+          .backgroundColor('#2d333d')
+          .onClick(() => {
+            if (this.onReset?.() === false) {
+              return;
+            }
+            this.controller?.close();
+          })
+        Button($r('app.string.endpoint_dialog_save'))
+          .fontSize(13)
+          .fontColor('#ffffff')
+          .backgroundColor('#4aa3ff')
+          .onClick(() => this.save())
+      }
+      .width('100%')
+      .justifyContent(FlexAlign.End)
+    }
+    .width('90%')
+    .padding(20)
+    .backgroundColor('#1c1f24')
+    .borderRadius(16)
   }
 }
 

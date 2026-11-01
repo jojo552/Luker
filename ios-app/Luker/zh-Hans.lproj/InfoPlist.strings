@@ -1,0 +1,6 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later
+   Copyright (C) 2026 FunnyCups (https://github.com/funnycups) */
+
+"NSCameraUsageDescription" = "Luker 使用相机来设置角色卡背景与发送图像输入。";
+"NSMicrophoneUsageDescription" = "Luker 使用麦克风来接收语音输入。";
+"NSLocalNetworkUsageDescription" = "Luker 会连接本地网络中的 Luker 端点。";

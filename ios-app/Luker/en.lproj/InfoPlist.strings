@@ -1,0 +1,6 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later
+   Copyright (C) 2026 FunnyCups (https://github.com/funnycups) */
+
+"NSCameraUsageDescription" = "Luker uses the camera for character card backgrounds and vision inputs.";
+"NSMicrophoneUsageDescription" = "Luker uses the microphone for speech-to-text inputs.";
+"NSLocalNetworkUsageDescription" = "Luker connects to a Luker endpoint on your local network.";

@@ -1041,7 +1041,7 @@ function applyImmersiveLayoutOverrides(enabled) {
     setElementStylePriority(chatContainer, 'max-height', '');
 }
 
-function isRunningInLukerAndroidApp() {
+export function isRunningInLukerAndroidApp() {
     return typeof window !== 'undefined'
         && typeof window.LukerAndroid === 'object';
 }

@@ -102,7 +102,7 @@ export async function dispatchSdXai(ctx) {
         const format = mime.extension(mimeType) || 'jpg';
         const image = dataUrlMatch?.[2] || encodedImage;
 
-        ctx.inspection.completeImage({ sizeBytes: Math.round(image.length * 0.75) });
+        ctx.inspection.completeImage({ format, data: image });
 
         const encoder = new TextEncoder();
         ctx.emit.chunk(encoder.encode(JSON.stringify({ image, format })));

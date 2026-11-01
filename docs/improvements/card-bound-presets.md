@@ -67,7 +67,7 @@ A character card can bind one or more recommended personas. When you open the ca
 - If you have not chosen a persona, Luker switches to the card's recommendation.
 - If you already have a persona, Luker warns that it differs from the card's recommendation, so you can choose whether to align or keep your own.
 
-Bound personas travel with the card on export, and recipients see the same recommendation on import.
+Bound personas travel with the card on export, and recipients can use the same persona after importing.
 
 ## Import and export round-trip
 

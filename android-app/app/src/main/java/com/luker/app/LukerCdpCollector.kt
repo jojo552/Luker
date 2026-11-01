@@ -81,6 +81,10 @@ object LukerCdpCollector {
         failedPids.merge(pid, 1) { old, _ -> old + 1 }
     }
 
+    fun markHealthyPid(pid: Int) {
+        failedPids.remove(pid)
+    }
+
     fun removeClient(pid: Int) {
         clients.remove(pid)
     }

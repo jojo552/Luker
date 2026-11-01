@@ -86,7 +86,8 @@ export async function dispatchSdCpp(ctx) {
         }
 
         const data = await result.json();
-        ctx.inspection.completeImage();
+        const image = Array.isArray(data?.images) ? data.images[0] : '';
+        ctx.inspection.completeImage({ format: 'png', data: typeof image === 'string' ? image : '' });
 
         const encoder = new TextEncoder();
         ctx.emit.chunk(encoder.encode(JSON.stringify(data)));

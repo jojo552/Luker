@@ -76,9 +76,10 @@ export async function dispatchSdHuggingface(ctx) {
         }
 
         const buffer = await result.arrayBuffer();
-        ctx.inspection.completeImage({ sizeBytes: buffer.byteLength });
+        const image = Buffer.from(buffer).toString('base64');
+        ctx.inspection.completeImage({ format: 'jpg', data: image });
 
-        const payload = { image: Buffer.from(buffer).toString('base64') };
+        const payload = { image };
         const encoder = new TextEncoder();
         ctx.emit.chunk(encoder.encode(JSON.stringify(payload)));
         ctx.emit.end();

@@ -98,6 +98,15 @@ export default function externalLinkPolicyTest(): void {
         .assertEqual(LinkRoute.InApp);
     });
 
+    it('a path under the app origin stays in app when given the origin', 0, () => {
+      const appOrigin: string = originOf('https://example.com/luker');
+      expect(appOrigin).assertEqual('https://example.com');
+      expect(routeTopLevelNavigation('https://example.com/chat', 'https://example.com/luker',
+        appOrigin, true)).assertEqual(LinkRoute.InApp);
+      expect(routeTopLevelNavigation('https://other.example/x', 'https://example.com/luker',
+        appOrigin, true)).assertEqual(LinkRoute.SystemBrowser);
+    });
+
     it('settings hold the toggle defaulting to on', 0, () => {
       expect(ExternalLinkSettings.isOpenExternally()).assertTrue();
       ExternalLinkSettings.setOpenExternally(false);

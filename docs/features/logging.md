@@ -18,7 +18,7 @@ Luker's backend logging system automatically intercepts all console output from 
 
 Both log sources are located in the **User Settings** drawer: open it and select **Logs**. Select **Server** or **Frontend** as the source, filter by start/end time or entry count, search the contents, then copy or clear the buffer. Server logs are visible to administrators, and on installs without user accounts.
 
-Next to it, **Export Debug Logs** downloads a single JSON bundle — frontend logs, performance marks, device and viewport info, server logs, and recent request-inspector entries — which is the most convenient item to attach to a bug report.
+The **Export Debug Logs** item in the **Diagnostics** menu downloads a single JSON bundle — frontend logs, performance marks, device and viewport info, server logs, and the request-inspector buffer — which is the most convenient item to attach to a bug report.
 
 ::: tip
 Backend logs are only kept in memory and are cleared on server restart. If you need persistent log records, it is recommended to redirect Luker's console output to a file.
@@ -32,25 +32,15 @@ Luker also includes a built-in log manager on the browser side for capturing var
 
 The frontend log manager intercepts browser console output — `console.trace`, `console.debug`, `console.log`, `console.info`, `console.warn`, `console.error` — and writes it to an in-memory buffer (up to 3000 entries).
 
-### Fetch Request Logs
-
-In addition to console output, the frontend log manager automatically records API request information sent by the browser, including:
-
-- Request method and path
-- Response status code and latency
-- Error messages for failed or aborted requests
-
-This information is processed with **smart summarization** — only key fields are extracted. Full request content is not recorded, balancing debugging value with privacy protection.
-
 ### Global Error Capture
 
 The frontend log manager also automatically captures unhandled errors and Promise rejection events in the browser, ensuring these easily overlooked exceptions are also recorded.
 
 ### Log Visibility
 
-By default, only `error`-level logs are displayed in the browser console. If you need more detailed debug information, you can enable debug mode, which outputs all log levels to the browser console.
+By default, only `error`-level logs are displayed in the browser console. If you need more detailed debug information, enable **Frontend debug logs** in the **Diagnostics** menu, which outputs all log levels to the browser console.
 
-Regardless of whether debug mode is enabled, all log levels are written to the in-memory buffer and can be exported for viewing at any time.
+Regardless of whether **Frontend debug logs** is enabled, all console levels are written to the in-memory buffer and can be exported for viewing at any time.
 
 ## Use Cases
 
@@ -59,19 +49,19 @@ Regardless of whether debug mode is enabled, all log levels are written to the i
 When Luker exhibits abnormal behavior, the logging system is the most direct troubleshooting tool:
 
 - **API connection failures** — Check error messages in the backend logs to confirm whether the API address and key are correct
-- **Generation interruptions** — Check Fetch request records in the frontend logs to understand whether requests timed out or were rejected
+- **Generation interruptions** — Check error messages in the frontend logs, or open the [Request Inspector](/improvements/request-inspector) to inspect the request lifecycle
 - **Extension errors** — Frontend logs capture runtime errors from extensions, helping locate the problematic extension
 
 ### Error Reporting
 
-If you need to report an issue to developers, use **Export Debug Logs** in the User Settings drawer — it bundles the log snapshot with the surrounding context, which is considerably more helpful for diagnosis than screenshots alone.
+If you need to report an issue to developers, use **Export Debug Logs** in the **Diagnostics** menu of the User Settings drawer — it bundles the log snapshot with the surrounding context, which is considerably more helpful for diagnosis than screenshots alone.
 
 ::: warning
-Logs may contain partial API request information. When sharing logs, please check whether they contain sensitive content (such as API keys). The frontend log manager already sanitizes sensitive fields, but it is still recommended to review logs before sharing.
+Logs and Request Inspector records may contain sensitive content (such as API keys). Review them before sharing.
 :::
 
 ## Related Pages
 
-- [User Settings Additions](/features/user-settings-additions) — where the Logs and Export Debug Logs buttons are located
+- [User Settings Additions](/features/user-settings-additions) — where the Logs, Diagnostics and Export Debug Logs controls are located
 - [Basic Configuration](/guide/configuration) — Log-related configuration options
 - [Auth & Quota](/improvements/auth-and-quota) — Authentication, permissions, and storage quota controls

@@ -37,8 +37,12 @@ class LukerCdpClient(
         try {
             val target = LukerCdpTarget.fetchTarget(pid)
             if (target == null) {
+                // The devtools socket exists as soon as the renderer starts,
+                // but it has no page target until the server URL loads — tens
+                // of seconds after a cold start. Counting these probes as
+                // failures blacklisted the pid for the rest of the process,
+                // so no console events were ever recorded.
                 LukerDebugTrail.append("native", "cdp-collector state=no-target pid=$pid")
-                collector.markFailedPid(pid)
                 return
             }
             val wsPath = LukerCdpTarget.extractPath(target.optString("webSocketDebuggerUrl", ""))
@@ -66,6 +70,7 @@ class LukerCdpClient(
         try {
             val ws = LukerWebSocketClient(sock.inputStream, sock.outputStream)
             ws.handshake(wsPath)
+            collector.markHealthyPid(pid)
             LukerDebugTrail.append("native", "cdp-collector state=bind pid=$pid")
             ws.sendText("""{"id":1,"method":"Log.enable"}""")
             ws.sendText("""{"id":2,"method":"Runtime.enable"}""")

@@ -131,41 +131,82 @@
         <div class="adminSecurityContent flex-container flexFlowColumn flexGap10"></div>
     </div>
 
-    <div class="navTab authAndQuotaTab flex-container flexFlowColumn flexGap10" style="display: none;">
-        <h4 class="margin0" data-i18n="Storage Quota">Storage Quota</h4>
-        <div class="flex-container alignItemsCenter flexGap10">
-            <label for="defaultUserQuotaMbInput" data-i18n="Default quota for new users (MB)">Default quota for new users (MB)</label>
-            <input id="defaultUserQuotaMbInput" class="text_pole" type="number" min="-1" step="1" placeholder="-1 for unlimited" data-i18n="[placeholder]-1 for unlimited" />
-        </div>
+    <div class="navTab authAndQuotaTab flex-container flexFlowColumn" style="display: none;">
+        <section class="adminSettingsSection">
+            <h4 class="adminSettingsSectionTitle" data-i18n="Storage Quota">Storage Quota</h4>
+            <div class="adminSettingsField">
+                <label class="adminSettingsFieldLabel" for="defaultUserQuotaMbInput" data-i18n="Default quota for new users (MB)">Default quota for new users (MB)</label>
+                <input id="defaultUserQuotaMbInput" class="text_pole adminSettingsNumberInput" type="number" min="-1" step="1" placeholder="-1 for unlimited" data-i18n="[placeholder]-1 for unlimited" />
+            </div>
+        </section>
 
-        <h4 class="margin0" data-i18n="Account Registration">Account Registration</h4>
-        <div class="flex-container flexFlowColumn flexGap10">
-            <label><input type="checkbox" id="accountRegistrationEnabled" /> <span data-i18n="Allow visitors to register accounts from the login page">Allow visitors to register accounts from the login page</span></label>
-            <small data-i18n="When enabled, the login page shows a &quot;Create account&quot; form. New accounts default to non-admin and respect the storage quota above.">When enabled, the login page shows a "Create account" form. New accounts default to non-admin and respect the storage quota above.</small>
-        </div>
+        <section class="adminSettingsSection">
+            <h4 class="adminSettingsSectionTitle" data-i18n="Account Registration">Account Registration</h4>
+            <label class="adminSettingsToggle">
+                <input type="checkbox" id="accountRegistrationEnabled" />
+                <span data-i18n="Allow visitors to register accounts from the login page">Allow visitors to register accounts from the login page</span>
+            </label>
+            <small class="adminSettingsHint" data-i18n="When enabled, the login page shows a &quot;Create account&quot; form. New accounts default to non-admin and respect the storage quota above.">When enabled, the login page shows a "Create account" form. New accounts default to non-admin and respect the storage quota above.</small>
+        </section>
 
-        <h4 class="margin0" data-i18n="GitHub OAuth">GitHub OAuth</h4>
-        <div class="flex-container flexFlowColumn flexGap10">
-            <label><input type="checkbox" id="oauthGithubEnabled" /> <span data-i18n="Enable GitHub OAuth login">Enable GitHub OAuth login</span></label>
-            <label><input type="checkbox" id="oauthGithubAutoCreate" /> <span data-i18n="Auto-create user on first GitHub login">Auto-create user on first GitHub login</span></label>
-            <input id="oauthGithubClientId" class="text_pole" type="text" placeholder="GitHub Client ID" data-i18n="[placeholder]GitHub Client ID" />
-            <input id="oauthGithubClientSecret" class="text_pole" type="password" placeholder="GitHub Client Secret" data-i18n="[placeholder]GitHub Client Secret" />
-        </div>
+        <section class="adminSettingsSection">
+            <h4 class="adminSettingsSectionTitle" data-i18n="GitHub OAuth">GitHub OAuth</h4>
+            <label class="adminSettingsToggle">
+                <input type="checkbox" id="oauthGithubEnabled" />
+                <span data-i18n="Enable GitHub OAuth login">Enable GitHub OAuth login</span>
+            </label>
+            <label class="adminSettingsToggle">
+                <input type="checkbox" id="oauthGithubAutoCreate" />
+                <span data-i18n="Auto-create user on first GitHub login">Auto-create user on first GitHub login</span>
+            </label>
+            <div class="adminSettingsField">
+                <label class="adminSettingsFieldLabel" for="oauthGithubClientId" data-i18n="GitHub Client ID">GitHub Client ID</label>
+                <input id="oauthGithubClientId" class="text_pole" type="text" />
+            </div>
+            <div class="adminSettingsField">
+                <label class="adminSettingsFieldLabel" for="oauthGithubClientSecret" data-i18n="GitHub Client Secret">GitHub Client Secret</label>
+                <input id="oauthGithubClientSecret" class="text_pole" type="password" />
+            </div>
+        </section>
 
-        <h4 class="margin0" data-i18n="Discord OAuth">Discord OAuth</h4>
-        <div class="flex-container flexFlowColumn flexGap10">
-            <label><input type="checkbox" id="oauthDiscordEnabled" /> <span data-i18n="Enable Discord OAuth login">Enable Discord OAuth login</span></label>
-            <label><input type="checkbox" id="oauthDiscordAutoCreate" /> <span data-i18n="Auto-create user on first Discord login">Auto-create user on first Discord login</span></label>
-            <label><input type="checkbox" id="oauthDiscordRequireGuild" /> <span data-i18n="Require membership in target server">Require membership in target server</span></label>
-            <input id="oauthDiscordClientId" class="text_pole" type="text" placeholder="Discord Client ID" data-i18n="[placeholder]Discord Client ID" />
-            <input id="oauthDiscordClientSecret" class="text_pole" type="password" placeholder="Discord Client Secret" data-i18n="[placeholder]Discord Client Secret" />
-            <textarea id="oauthDiscordScopes" class="text_pole" rows="2" placeholder="Extra OAuth scopes (optional, comma/space/new line separated; identify is always included)" data-i18n="[placeholder]Extra OAuth scopes (optional, comma/space/new line separated\; identify is always included)"></textarea>
-            <textarea id="oauthDiscordAllowedGuilds" class="text_pole" rows="2" placeholder="Allowed server IDs (comma or new line separated)" data-i18n="[placeholder]Allowed server IDs (comma or new line separated)"></textarea>
-            <textarea id="oauthDiscordRequiredRoles" class="text_pole" rows="2" placeholder="Required role IDs (optional, comma or new line separated)" data-i18n="[placeholder]Required role IDs (optional, comma or new line separated)"></textarea>
-            <small data-i18n="When &quot;Require membership in target server&quot; is enabled, required Discord scopes for server checks are added automatically.">When "Require membership in target server" is enabled, required Discord scopes for server checks are added automatically.</small>
-        </div>
+        <section class="adminSettingsSection">
+            <h4 class="adminSettingsSectionTitle" data-i18n="Discord OAuth">Discord OAuth</h4>
+            <label class="adminSettingsToggle">
+                <input type="checkbox" id="oauthDiscordEnabled" />
+                <span data-i18n="Enable Discord OAuth login">Enable Discord OAuth login</span>
+            </label>
+            <label class="adminSettingsToggle">
+                <input type="checkbox" id="oauthDiscordAutoCreate" />
+                <span data-i18n="Auto-create user on first Discord login">Auto-create user on first Discord login</span>
+            </label>
+            <label class="adminSettingsToggle">
+                <input type="checkbox" id="oauthDiscordRequireGuild" />
+                <span data-i18n="Require membership in target server">Require membership in target server</span>
+            </label>
+            <div class="adminSettingsField">
+                <label class="adminSettingsFieldLabel" for="oauthDiscordClientId" data-i18n="Discord Client ID">Discord Client ID</label>
+                <input id="oauthDiscordClientId" class="text_pole" type="text" />
+            </div>
+            <div class="adminSettingsField">
+                <label class="adminSettingsFieldLabel" for="oauthDiscordClientSecret" data-i18n="Discord Client Secret">Discord Client Secret</label>
+                <input id="oauthDiscordClientSecret" class="text_pole" type="password" />
+            </div>
+            <div class="adminSettingsField">
+                <label class="adminSettingsFieldLabel" for="oauthDiscordScopes" data-i18n="Extra OAuth scopes (optional, comma/space/new line separated\; identify is always included)">Extra OAuth scopes (optional, comma/space/new line separated; identify is always included)</label>
+                <textarea id="oauthDiscordScopes" class="text_pole" rows="2"></textarea>
+            </div>
+            <div class="adminSettingsField">
+                <label class="adminSettingsFieldLabel" for="oauthDiscordAllowedGuilds" data-i18n="Allowed server IDs (comma or new line separated)">Allowed server IDs (comma or new line separated)</label>
+                <textarea id="oauthDiscordAllowedGuilds" class="text_pole" rows="2"></textarea>
+            </div>
+            <div class="adminSettingsField">
+                <label class="adminSettingsFieldLabel" for="oauthDiscordRequiredRoles" data-i18n="Required role IDs (optional, comma or new line separated)">Required role IDs (optional, comma or new line separated)</label>
+                <textarea id="oauthDiscordRequiredRoles" class="text_pole" rows="2"></textarea>
+            </div>
+            <small class="adminSettingsHint" data-i18n="When &quot;Require membership in target server&quot; is enabled, required Discord scopes for server checks are added automatically.">When "Require membership in target server" is enabled, required Discord scopes for server checks are added automatically.</small>
+        </section>
 
-        <div class="flex-container">
+        <div class="adminSettingsActions">
             <div class="saveAuthQuotaSettingsButton menu_button menu_button_icon">
                 <i class="fa-fw fa-solid fa-save"></i>
                 <span data-i18n="Save Auth & Limit Settings">Save Auth & Limit Settings</span>

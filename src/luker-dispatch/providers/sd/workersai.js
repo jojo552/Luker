@@ -138,7 +138,7 @@ export async function dispatchSdWorkersai(ctx) {
                 ctx.emit.error(err);
                 return;
             }
-            ctx.inspection.completeImage({ format: 'png', sizeBytes: Math.round(image.length * 0.75) });
+            ctx.inspection.completeImage({ format: 'png', data: image });
             const encoder = new TextEncoder();
             ctx.emit.chunk(encoder.encode(JSON.stringify({ format: 'png', image })));
             ctx.emit.end();
@@ -148,7 +148,7 @@ export async function dispatchSdWorkersai(ctx) {
         // Non-partner models return raw binary image data
         const buffer = await result.arrayBuffer();
         const image = Buffer.from(buffer).toString('base64');
-        ctx.inspection.completeImage({ format: 'png', sizeBytes: buffer.byteLength });
+        ctx.inspection.completeImage({ format: 'png', data: image });
 
         const encoder = new TextEncoder();
         ctx.emit.chunk(encoder.encode(JSON.stringify({ format: 'png', image })));

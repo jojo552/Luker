@@ -240,6 +240,7 @@ export const power_user = {
     immersive_mode_keep_top_bar: false,
     luker_mobile_keep_alive_android_enabled: false,
     luker_mobile_keep_alive_harmony_enabled: false,
+    luker_mobile_keep_alive_ios_enabled: false,
     luker_mobile_keep_alive_web_audio_enabled: false,
     luker_open_external_links_in_browser: true,
     hotswap_enabled: true,
@@ -476,6 +477,26 @@ function canUseAndroidBridgeNotifications() {
         && typeof window.LukerAndroid.notifyMessageFinished === 'function';
 }
 
+function canUseIOSBridgeNotifications() {
+    return typeof window !== 'undefined'
+        && typeof window.LukerIOS === 'object'
+        && window.LukerIOS !== null
+        && typeof window.LukerIOS.notifyMessageFinished === 'function';
+}
+
+function notifyIOSMessageFinished(title, body) {
+    if (!canUseIOSBridgeNotifications()) {
+        return false;
+    }
+    try {
+        window.LukerIOS.notifyMessageFinished(title, body);
+        return true;
+    } catch (error) {
+        console.warn('Failed to show iOS notification via bridge', error);
+        return false;
+    }
+}
+
 function canUseAndroidBridgeProgressNotifications() {
     return typeof window !== 'undefined'
         && typeof window.LukerAndroid === 'object'
@@ -514,6 +535,8 @@ function syncMobileKeepAliveCheckbox() {
         checked = !!power_user.luker_mobile_keep_alive_android_enabled;
     } else if (platform === 'harmony') {
         checked = !!power_user.luker_mobile_keep_alive_harmony_enabled;
+    } else if (platform === 'ios') {
+        checked = !!power_user.luker_mobile_keep_alive_ios_enabled;
     } else if (platform === 'web') {
         checked = !!power_user.luker_mobile_keep_alive_web_audio_enabled || getActiveKeepAliveMode() === 'pip';
     }
@@ -547,6 +570,7 @@ function getScopedKeepAliveMode() {
     const platform = getKeepAlivePlatform();
     if (platform === 'web' && power_user.luker_mobile_keep_alive_web_audio_enabled) return 'audio';
     if (platform === 'harmony' && power_user.luker_mobile_keep_alive_harmony_enabled) return 'harmony';
+    if (platform === 'ios' && power_user.luker_mobile_keep_alive_ios_enabled) return 'ios';
     return null;
 }
 
@@ -566,13 +590,20 @@ function scopedKeepAliveActivationSync() {
             setKeepAliveMode(mode).catch((error) => {
                 console.warn(`[Luker] Failed to enter ${mode} keep-alive`, error);
             });
+        } else if (mode === 'harmony' || mode === 'ios') {
+            // Native leases can expire while a generation is still running.
+            // Re-arm on every in-flight transition so the next generation
+            // starts a fresh lease instead of trusting the stale active mode.
+            setKeepAliveMode(mode).catch((error) => {
+                console.warn(`[Luker] Failed to renew ${mode} keep-alive`, error);
+            });
         }
     } else if (!scopedKeepAliveDeactivateTimer) {
         scopedKeepAliveDeactivateTimer = setTimeout(() => {
             scopedKeepAliveDeactivateTimer = null;
             if (scopedKeepAliveShouldHold()) return;
             const active = getActiveKeepAliveMode();
-            if (active === 'audio' || active === 'harmony') {
+            if (active === 'audio' || active === 'harmony' || active === 'ios') {
                 setKeepAliveMode('off').catch((error) => {
                     console.warn(`[Luker] Failed to exit ${active} keep-alive`, error);
                 });
@@ -750,6 +781,9 @@ async function applyMobileKeepAliveFromUser(checked) {
         } else if (platform === 'harmony') {
             power_user.luker_mobile_keep_alive_harmony_enabled = false;
             saveSettingsDebounced();
+        } else if (platform === 'ios') {
+            power_user.luker_mobile_keep_alive_ios_enabled = false;
+            saveSettingsDebounced();
         } else if (platform === 'web') {
             power_user.luker_mobile_keep_alive_web_audio_enabled = false;
             saveSettingsDebounced();
@@ -775,6 +809,14 @@ async function applyMobileKeepAliveFromUser(checked) {
     if (getKeepAlivePlatform() === 'harmony') {
         // Takes effect on the next GENERATION_STARTED, like web audio mode.
         power_user.luker_mobile_keep_alive_harmony_enabled = true;
+        saveSettingsDebounced();
+        syncMobileKeepAliveCheckbox();
+        return;
+    }
+
+    if (getKeepAlivePlatform() === 'ios') {
+        // Takes effect on the next GENERATION_STARTED, like the HarmonyOS lease.
+        power_user.luker_mobile_keep_alive_ios_enabled = true;
         saveSettingsDebounced();
         syncMobileKeepAliveCheckbox();
         return;
@@ -876,6 +918,15 @@ function resolveNotificationSpeakerName(explicitName = '') {
 }
 
 async function ensureMessageNotificationPermission() {
+    if (canUseIOSBridgeNotifications()) {
+        try {
+            return await window.LukerIOS.requestNotificationPermission() === true;
+        } catch (error) {
+            console.warn('Failed to request iOS notification permission', error);
+            return false;
+        }
+    }
+
     if (!canUseBrowserNotifications()) {
         return canUseAndroidBridgeNotifications();
     }
@@ -994,6 +1045,10 @@ export function notifyMessageComplete(messageText = '', assistantName = '') {
     const speakerName = resolveNotificationSpeakerName(assistantName);
     const bodyWithSpeaker = speakerName ? `${speakerName}: ${body}` : body;
 
+    if (notifyIOSMessageFinished(title, bodyWithSpeaker)) {
+        return;
+    }
+
     if (canUseBrowserNotifications() && Notification.permission === 'granted') {
         try {
             const notification = new Notification(title, {
@@ -1032,6 +1087,10 @@ export function notifyMessageFailure(errorText = '', assistantName = '') {
     const body = buildMessageFailureNotificationBody(errorText);
     const speakerName = resolveNotificationSpeakerName(assistantName);
     const bodyWithSpeaker = speakerName ? `${speakerName}: ${body}` : body;
+
+    if (notifyIOSMessageFinished(title, bodyWithSpeaker)) {
+        return;
+    }
 
     if (canUseBrowserNotifications() && Notification.permission === 'granted') {
         try {

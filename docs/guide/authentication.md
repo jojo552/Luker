@@ -68,7 +68,7 @@ The recovery code is only output to the server console. Make sure only trusted a
 enableDiscreetLogin: true
 ```
 
-When enabled, the login page won't display obvious Luker branding — useful for low-profile deployments.
+When enabled, the login page stops listing existing accounts. Users type their handle and password instead of picking an account, so account names are not exposed to visitors.
 
 ## Self-Service Registration
 
@@ -107,6 +107,24 @@ This is particularly useful for community-shared Luker instances — only specif
 ::: tip
 If you don't need OAuth login, there's no need to enable it in the Admin Panel. Luker still supports Basic Auth and multi-user account authentication as described above.
 :::
+
+## SSO
+
+With multi-user accounts enabled, Luker can auto-login a user whose identity a reverse proxy has already verified:
+
+```yaml
+sso:
+  autheliaAuth: true
+  authentikAuth: false
+  trustedProxies:
+    - 127.0.0.1
+    - ::1
+```
+
+- Authelia asserts the user through the `Remote-User` header.
+- Authentik asserts the user through the `X-Authentik-Username` header.
+
+The header value must match the handle of an existing enabled account; Luker does not create accounts from SSO. `sso.trustedProxies` lists the proxy addresses allowed to assert a user. Requests from any other address ignore the header. Setting it to `['*']` trusts every client, so reserve that for deployments where the proxy is the only way in.
 
 ## Storage Quota Management
 

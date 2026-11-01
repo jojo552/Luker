@@ -108,12 +108,12 @@ export async function dispatchSdStability(ctx) {
         }
 
         const buffer = await result.arrayBuffer();
-        ctx.inspection.completeImage({ sizeBytes: buffer.byteLength });
+        const b64 = Buffer.from(buffer).toString('base64');
+        ctx.inspection.completeImage({ format: 'png', data: b64 });
 
         // Wire shape: raw base64 STRING (not JSON). Client reads via
         // response.text(). Emit the base64 string as UTF-8 bytes so the
         // downstream event bus preserves it verbatim.
-        const b64 = Buffer.from(buffer).toString('base64');
         const encoder = new TextEncoder();
         ctx.emit.chunk(encoder.encode(b64));
         ctx.emit.end();

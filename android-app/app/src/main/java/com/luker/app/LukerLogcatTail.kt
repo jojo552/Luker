@@ -30,6 +30,15 @@ object LukerLogcatTail {
     private const val MAX_RESTARTS = 3
     private const val RESTART_DELAY_MS = 5_000L
 
+    /**
+     * Chromium emits a SharedImageLifetimeDebug line per texture reference
+     * change. At roughly 380 KB/s it filled the whole two-generation buffer in
+     * under a second, so the window before a crash was always overwritten.
+     * Dropping these lines keeps everything else, including real Chromium
+     * errors, in the file.
+     */
+    private const val NOISE_MARKER = "SharedImageLifetimeDebug"
+
     @Volatile
     private var daemon: Thread? = null
 
@@ -100,9 +109,14 @@ object LukerLogcatTail {
         BufferedReader(InputStreamReader(process.inputStream)).use { reader ->
             var output: OutputStream = openAppending(current)
             var writtenToCurrent = current.length()
+            var skippedNoise = 0L
             try {
                 while (!stopRequested) {
                     val line = reader.readLine() ?: break
+                    if (isNoiseLine(line)) {
+                        skippedNoise++
+                        continue
+                    }
                     val bytes = (line + "\n").toByteArray()
                     output.write(bytes)
                     writtenToCurrent += bytes.size
@@ -111,14 +125,26 @@ object LukerLogcatTail {
                         output.close()
                         rotateForTest(current, last)
                         output = openAppending(current)
-                        writtenToCurrent = 0L
+                        writtenToCurrent = writeNoiseMarker(output, skippedNoise).toLong()
+                        skippedNoise = 0L
                     }
                 }
             } finally {
+                runCatching { writeNoiseMarker(output, skippedNoise) }
                 runCatching { output.flush() }
                 runCatching { output.close() }
             }
         }
+    }
+
+    @VisibleForTesting
+    internal fun isNoiseLine(line: String): Boolean = line.contains(NOISE_MARKER)
+
+    private fun writeNoiseMarker(output: OutputStream, skipped: Long): Int {
+        if (skipped <= 0L) return 0
+        val bytes = "--------- logcat-tail skipped $skipped $NOISE_MARKER lines ---------\n".toByteArray()
+        output.write(bytes)
+        return bytes.size
     }
 
     private fun startLogcatProcess(): Process {

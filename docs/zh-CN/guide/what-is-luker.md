@@ -134,7 +134,7 @@ SillyTavern 中 API 预设和聊天补全预设是联动切换的，换一个模
 - **备份、存储与迁移**——按数据类别[备份与恢复](/zh-CN/features/user-settings-additions)，查看[服务端](/zh-CN/features/storage-inspector)和浏览器端的存储占用，还能通过局域网把整套环境迁移到新设备。
 - **给角色卡作者的结构化数据**——[逐楼层变量](/zh-CN/features/variable-op-log)和[状态系统](/zh-CN/features/state-system)。
 - **排查问题**——[日志系统](/zh-CN/features/logging)可切换前端与后端来源，另有一键导出调试包。
-- **日常体验**——[沉浸模式、移动端后台保活、回复完成通知、消息媒体懒加载](/zh-CN/features/user-settings-additions)、撤销 Toast、聊天人设锁定、预设与提示词的分组折叠、从提供商实时拉取的模型列表、世界书激活链路追踪、预设关联世界书、插件注册正则。
+- **日常体验**——[沉浸模式、移动端后台保活、回复完成通知、消息媒体懒加载](/zh-CN/features/user-settings-additions)、撤销 Toast、角色卡携带的人设、预设与提示词的分组折叠、从提供商实时拉取的模型列表、世界书激活链路追踪、预设关联世界书、插件注册正则。
 :::
 
 ## 兼容性

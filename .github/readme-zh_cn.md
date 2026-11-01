@@ -16,6 +16,7 @@
 [![Docs](https://img.shields.io/badge/docs-luker.cups.moe-orange?style=flat)](https://luker.cups.moe/zh-CN/)
 [![Android APK](https://img.shields.io/badge/download-Android%20APK-3ddc84?style=flat&logo=android&logoColor=white)](https://github.com/funnycups/Luker/releases)
 [![HarmonyOS HAP](https://img.shields.io/badge/build-HarmonyOS%20HAP-000000?style=flat)](https://luker.cups.moe/guide/harmonyos)
+[![iOS IPA](https://img.shields.io/badge/download-iOS%20IPA-000000?style=flat&logo=apple&logoColor=white)](https://github.com/funnycups/Luker/releases)
 [![Desktop app](https://img.shields.io/badge/download-Windows%2C%20macOS%20%26%20Linux-0078d4?style=flat)](https://luker.cups.moe/zh-CN/guide/desktop)
 
 </div>
@@ -93,6 +94,14 @@ Luker 的后端同样**内嵌于** HarmonyOS 应用运行。用 DevEco Studio �
 
 → [HarmonyOS 应用指南](https://luker.cups.moe/zh-CN/guide/harmonyos)
 
+### 原生 iOS 应用 —— 把整个平台装进 iPhone 与 iPad
+
+Luker 的后端同样**内嵌于** iOS 应用运行。安装未签名 IPA，用 AltStore 或 SideStore 以你自己的 Apple ID 签名，即可在一部设备上获得完整的服务端与界面——无需终端、无需手动安装 Node、无需端口转发。
+
+![iOS 演示](https://raw.githubusercontent.com/funnycups/Luker/release/docs/public/images/branding/ios-demo.gif)
+
+→ [iOS 应用指南](https://luker.cups.moe/zh-CN/guide/ios)
+
 ### 原生桌面应用 —— Windows、macOS、Linux
 
 Luker 的后端同样**内嵌于**打包好的桌面应用运行。从 Releases 下载对应平台的安装包或压缩包，打开，在 macOS 与 Windows 上放行首次启动的安全提示，即可在原生窗口中运行完整的服务端与界面——无需终端、无需手动安装 Node、无需端口转发。
@@ -139,7 +148,7 @@ SillyTavern 中 API 连接与聊天补全预设是联动的，切换模型会连
 
 ---
 
-此外还有一长串小便利功能：预设与提示词的分组、聊天人设锁定、撤销 Toast、能看到世界书条目因何激活的追踪、从各提供商实时拉取的模型列表。详见[文档](https://luker.cups.moe/zh-CN/)。
+此外还有一长串小便利功能：预设与提示词的分组、角色卡携带的人设、撤销 Toast、能看到世界书条目因何激活的追踪、从各提供商实时拉取的模型列表。详见[文档](https://luker.cups.moe/zh-CN/)。
 
 ## 界面截图
 

@@ -90,7 +90,7 @@ export async function dispatchSdPollinations(ctx) {
         const image = Buffer.from(buffer).toString('base64');
         const format = mime.extension(contentType) || 'jpg';
 
-        ctx.inspection.completeImage({ format, sizeBytes: buffer.byteLength });
+        ctx.inspection.completeImage({ format, data: image });
         const payload = { image, format };
         const encoder = new TextEncoder();
         ctx.emit.chunk(encoder.encode(JSON.stringify(payload)));

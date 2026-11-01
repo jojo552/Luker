@@ -27,6 +27,33 @@ object LukerCrashCapture {
     private const val WEBVIEW_REPORT_FILE_NAME = "luker-last-webview-crash-report.txt"
     private const val MAX_HISTORY_LOOKUP = 16
 
+    /**
+     * POSIX signal numbers, identical on every Android ABI. Spelled out
+     * instead of using android.system.OsConstants because those are not
+     * compile-time constants: they read as 0 in local unit tests, which made
+     * the classification untestable.
+     */
+    private const val SIGNAL_SIGABRT = 6
+    private const val SIGNAL_SIGBUS = 7
+    private const val SIGNAL_SIGFPE = 8
+    private const val SIGNAL_SIGILL = 4
+    private const val SIGNAL_SIGKILL = 9
+    private const val SIGNAL_SIGSEGV = 11
+    private const val SIGNAL_SIGTERM = 15
+
+    /**
+     * Signals that mean the process chose to die after detecting a fatal
+     * condition. Kept out in [isActionableExit] because the numeric value of
+     * [ApplicationExitInfo.status] is the signal for REASON_SIGNALED.
+     */
+    private val FATAL_SIGNALS = setOf(
+        SIGNAL_SIGABRT,
+        SIGNAL_SIGBUS,
+        SIGNAL_SIGFPE,
+        SIGNAL_SIGILL,
+        SIGNAL_SIGSEGV,
+    )
+
     data class CapturedCrash(
         val report: String,
         val reportFile: File?,
@@ -72,7 +99,8 @@ object LukerCrashCapture {
         val enrichedReport = buildString {
             append(captured.report)
             append("\n\n--- debug-trail ---\n")
-            val trail = runCatching { LukerDebugTrail.dumpAll() }.getOrDefault("")
+            val trail = runCatching { LukerDebugTrail.readPersisted() }.getOrDefault("")
+                .ifEmpty { runCatching { LukerDebugTrail.dumpAll() }.getOrDefault("") }
             append(trail.ifEmpty { "<empty>" })
             appendLogcatTailsForCrash(this, context)
             if (cdpSnapshotPath != null) {
@@ -236,7 +264,7 @@ object LukerCrashCapture {
         }
 
         val lastHandled = prefs.getLong(PREF_KEY_LAST_TIMESTAMP, 0L)
-        val candidate = history.firstOrNull { isAbnormalExit(it.reason) } ?: return null
+        val candidate = history.firstOrNull { isAbnormalExit(it) } ?: return null
         if (candidate.timestamp <= lastHandled) {
             return null
         }
@@ -251,7 +279,17 @@ object LukerCrashCapture {
     }
 
     @RequiresApi(Build.VERSION_CODES.R)
-    private fun isAbnormalExit(reason: Int): Boolean = when (reason) {
+    private fun isAbnormalExit(info: ApplicationExitInfo): Boolean =
+        isActionableExit(info.reason, info.status)
+
+    /**
+     * Whether an exit record should produce a crash report. Signals are split
+     * by cause: SIGABRT and friends mean the process terminated itself after
+     * detecting a fatal condition (failed allocation, assertion, debugger
+     * abort), while SIGKILL usually comes from outside the process and would
+     * turn routine task-killer behavior into a false crash report.
+     */
+    internal fun isActionableExit(reason: Int, status: Int): Boolean = when (reason) {
         ApplicationExitInfo.REASON_CRASH,
         ApplicationExitInfo.REASON_CRASH_NATIVE,
         ApplicationExitInfo.REASON_ANR,
@@ -259,20 +297,67 @@ object LukerCrashCapture {
         ApplicationExitInfo.REASON_DEPENDENCY_DIED,
         ApplicationExitInfo.REASON_EXCESSIVE_RESOURCE_USAGE,
         ApplicationExitInfo.REASON_INITIALIZATION_FAILURE -> true
+        ApplicationExitInfo.REASON_SIGNALED -> status in FATAL_SIGNALS
         else -> false
+    }
+
+    internal fun signalName(signal: Int): String = when (signal) {
+        SIGNAL_SIGABRT -> "SIGABRT"
+        SIGNAL_SIGBUS -> "SIGBUS"
+        SIGNAL_SIGFPE -> "SIGFPE"
+        SIGNAL_SIGILL -> "SIGILL"
+        SIGNAL_SIGSEGV -> "SIGSEGV"
+        SIGNAL_SIGKILL -> "SIGKILL"
+        SIGNAL_SIGTERM -> "SIGTERM"
+        else -> "signal $signal"
+    }
+
+    /**
+     * Every exit record the system still holds, abnormal or not. Exported with
+     * diagnostics so an exit reason outside [isActionableExit] is still
+     * visible instead of silently disappearing.
+     */
+    @RequiresApi(Build.VERSION_CODES.R)
+    fun collectExitHistory(context: Context): String {
+        val activityManager = context.getSystemService(ActivityManager::class.java)
+            ?: return "exit-history: <ActivityManager unavailable>"
+        val history = runCatching {
+            activityManager.getHistoricalProcessExitReasons(context.packageName, 0, 0)
+        }.getOrElse {
+            return "exit-history: <unavailable: ${it.message ?: it.javaClass.simpleName}>"
+        }
+        if (history.isEmpty()) {
+            return "exit-history: <empty>"
+        }
+        return buildString {
+            append("exit-history: ").append(history.size).append(" records, newest first\n")
+            history.forEachIndexed { index, info ->
+                append('\n').append('[').append(index).append(']').append('\n')
+                append(formatExitInfoHeader(info))
+            }
+        }
     }
 
     @RequiresApi(Build.VERSION_CODES.R)
     private fun formatExitInfo(context: Context, info: ApplicationExitInfo): Pair<String, String> {
+        return formatExitInfoHeader(info) to buildTraceSection(context, info)
+    }
+
+    @RequiresApi(Build.VERSION_CODES.R)
+    private fun formatExitInfoHeader(info: ApplicationExitInfo): String {
         val formatter = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US)
-        val header = buildString {
+        return buildString {
             append("when=").append(formatter.format(Date(info.timestamp))).append('\n')
             append("reason=").append(reasonName(info.reason))
                 .append(" (").append(info.reason).append(")\n")
             append("description=").append(info.description?.ifBlank { "<none>" } ?: "<none>").append('\n')
             append("importance=").append(importanceName(info.importance))
                 .append(" (").append(info.importance).append(")\n")
-            append("status=").append(info.status).append('\n')
+            append("status=").append(info.status)
+            if (info.reason == ApplicationExitInfo.REASON_SIGNALED) {
+                append(" (").append(signalName(info.status)).append(')')
+            }
+            append('\n')
             append("pss=").append(info.pss).append(" KB\n")
             append("rss=").append(info.rss).append(" KB\n")
             append("pid=").append(info.pid).append('\n')
@@ -281,8 +366,6 @@ object LukerCrashCapture {
             append("android=").append(Build.VERSION.RELEASE)
                 .append(" (sdk=").append(Build.VERSION.SDK_INT).append(")\n")
         }
-        val traceSection = buildTraceSection(context, info)
-        return header to traceSection
     }
 
     @RequiresApi(Build.VERSION_CODES.R)
@@ -299,6 +382,14 @@ object LukerCrashCapture {
                     "trace (native tombstone): saved as protobuf to $savedPath — share this file with the developer; it is not human-readable as text."
                 } else {
                     "trace: <native tombstone was not retained by the system (debuggerd circular buffer may have rotated it out)>"
+                }
+            }
+            ApplicationExitInfo.REASON_SIGNALED -> {
+                val savedPath = persistNativeTombstone(context, info)
+                if (savedPath != null) {
+                    "trace (native tombstone): saved as protobuf to $savedPath — share this file with the developer; it is not human-readable as text."
+                } else {
+                    "trace: <the system retained no tombstone for this signal; an aborting process usually leaves its reason in the logcat tail>"
                 }
             }
             ApplicationExitInfo.REASON_CRASH -> {
@@ -361,6 +452,9 @@ object LukerCrashCapture {
         ApplicationExitInfo.REASON_USER_REQUESTED -> "USER_REQUESTED"
         ApplicationExitInfo.REASON_USER_STOPPED -> "USER_STOPPED"
         ApplicationExitInfo.REASON_DEPENDENCY_DIED -> "DEPENDENCY_DIED"
+        ApplicationExitInfo.REASON_FREEZER -> "FREEZER"
+        ApplicationExitInfo.REASON_PACKAGE_STATE_CHANGE -> "PACKAGE_STATE_CHANGE"
+        ApplicationExitInfo.REASON_PACKAGE_UPDATED -> "PACKAGE_UPDATED"
         ApplicationExitInfo.REASON_OTHER -> "OTHER"
         else -> "REASON_$reason"
     }

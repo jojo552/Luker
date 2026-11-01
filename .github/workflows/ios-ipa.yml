@@ -1,0 +1,128 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 FunnyCups (https://github.com/funnycups)
+
+name: Build iOS IPA
+
+# CI model mirrors .github/workflows/android-apk.yml: push on any branch
+# builds a debug artifact, push on a tag publishes the release asset.
+#
+# Both flavors stay UNSIGNED on purpose. Apple's App Store distribution terms
+# conflict with the AGPL free-redistribution requirements, and signing with a
+# project certificate for public distribution would violate the Apple
+# Developer Program License Agreement. Users sign the IPA with their own
+# Apple ID via AltStore/SideStore; see docs/guide/ios.md.
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: Build type to run manually
+        required: true
+        default: debug
+        type: choice
+        options:
+          - debug
+          - release
+  push:
+    branches:
+      - "**"
+    tags:
+      - "*"
+
+permissions:
+  contents: write
+
+env:
+  NODEJS_MOBILE_ASSET_URL: https://github.com/funnycups/nodejs-mobile/releases/latest/download/nodejs-mobile-ios.zip
+  NODEJS_MOBILE_ASSET_NAME: nodejs-mobile-ios.zip
+  NODEJS_MOBILE_RUNTIME_MAJOR: "24"
+  NODEJS_MOBILE_MIN_MAJOR: "24"
+  NODEJS_MOBILE_ENFORCE_MIN_MAJOR: "1"
+
+jobs:
+  build-debug-ipa:
+    if: >
+      github.repository == 'funnycups/Luker' &&
+      ((github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/')) || (github.event_name == 'workflow_dispatch' && github.event.inputs.build_type == 'debug'))
+    runs-on: macos-15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: "npm"
+
+      - name: Setup Xcode
+        uses: mobiledevops/xcode-select-version-action@v1
+        with:
+          xcode-select-version: "26.3"
+
+      - name: Install xcodegen
+        run: brew install xcodegen
+
+      - name: Build debug IPA
+        run: bash ios-app/scripts/build-ios-ipa.sh debug
+
+      - name: Upload debug IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: luker-ios-debug-ipa-${{ github.sha }}
+          path: ios-app/dist/*.ipa
+          if-no-files-found: error
+
+  build-release-ipa:
+    if: >
+      github.repository == 'funnycups/Luker' &&
+      ((github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')) || (github.event_name == 'workflow_dispatch' && github.event.inputs.build_type == 'release'))
+    runs-on: macos-15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: "npm"
+
+      - name: Validate tag matches app version
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+        run: |
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          if [[ "${TAG_VERSION}" != "${PKG_VERSION}" ]]; then
+            echo "Tag version (${TAG_VERSION}) does not match package.json version (${PKG_VERSION})." >&2
+            exit 1
+          fi
+
+      - name: Setup Xcode
+        uses: mobiledevops/xcode-select-version-action@v1
+        with:
+          xcode-select-version: "26.3"
+
+      - name: Install xcodegen
+        run: brew install xcodegen
+
+      - name: Build release IPA
+        run: bash ios-app/scripts/build-ios-ipa.sh release
+
+      - name: Upload release IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: luker-ios-release-ipa-${{ github.sha }}
+          path: ios-app/dist/*.ipa
+          if-no-files-found: error
+
+      - name: Publish release assets
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          generate_release_notes: true
+          files: |
+            ios-app/dist/*.ipa

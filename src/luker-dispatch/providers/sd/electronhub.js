@@ -93,7 +93,7 @@ export async function dispatchSdElectronHub(ctx) {
             return;
         }
 
-        ctx.inspection.completeImage({ sizeBytes: Math.round(image.length * 0.75) });
+        ctx.inspection.completeImage({ format: 'jpg', data: image });
 
         const encoder = new TextEncoder();
         ctx.emit.chunk(encoder.encode(JSON.stringify({ image })));

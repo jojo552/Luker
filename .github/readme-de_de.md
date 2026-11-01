@@ -16,6 +16,7 @@
 [![Docs](https://img.shields.io/badge/docs-luker.cups.moe-orange?style=flat)](https://luker.cups.moe)
 [![Android APK](https://img.shields.io/badge/download-Android%20APK-3ddc84?style=flat&logo=android&logoColor=white)](https://github.com/funnycups/Luker/releases)
 [![HarmonyOS HAP](https://img.shields.io/badge/build-HarmonyOS%20HAP-000000?style=flat)](https://luker.cups.moe/guide/harmonyos)
+[![iOS IPA](https://img.shields.io/badge/download-iOS%20IPA-000000?style=flat&logo=apple&logoColor=white)](https://github.com/funnycups/Luker/releases)
 [![Desktop app](https://img.shields.io/badge/download-Windows%2C%20macOS%20%26%20Linux-0078d4?style=flat)](https://luker.cups.moe/guide/desktop)
 
 </div>
@@ -93,6 +94,14 @@ Das Luker-Backend läuft ebenfalls *innerhalb* einer HarmonyOS-App. Baue die HAP
 
 → [HarmonyOS-App-Anleitung](https://luker.cups.moe/guide/harmonyos)
 
+### Native iOS-App — die komplette Plattform auf iPhone und iPad
+
+Das Luker-Backend läuft ebenfalls *innerhalb* einer iOS-App. Installiere die unsignierte IPA, signiere sie mit deiner eigenen Apple ID über AltStore oder SideStore, und der komplette Server samt UI läuft auf einem Gerät — ohne Terminal, ohne manuelle Node-Installation und ohne Port-Forwarding.
+
+![iOS-Demo](https://raw.githubusercontent.com/funnycups/Luker/release/docs/public/images/branding/ios-demo.gif)
+
+→ [iOS-App-Anleitung](https://luker.cups.moe/guide/ios)
+
 ### Native Desktop-App — Windows, macOS und Linux
 
 Das Luker-Backend läuft ebenfalls *innerhalb* einer gepackten Desktop-App. Lade den Installer oder das Archiv für deine Plattform von Releases herunter, öffne ihn und erlaube unter macOS und Windows die Sicherheitswarnung beim ersten Start — der komplette Server samt UI läuft dann in einem nativen Fenster, ohne Terminal, ohne manuelle Node-Installation, ohne Port-Forwarding.
@@ -139,7 +148,7 @@ Die Generierung läuft auf dem Backend und wird per WebSocket an die UI gestream
 
 ---
 
-Eine lange Reihe kleiner Annehmlichkeiten rundet das Ganze ab — Gruppen für Presets und Prompts, Persona-Sperren pro Chat, Rückgängig-Toasts, ein Trace, der zeigt, welche Weltinfo-Einträge ausgelöst wurden und warum, sowie Modelllisten, die live vom jeweiligen Anbieter abgerufen werden. All das ist in der [Dokumentation](https://luker.cups.moe) beschrieben.
+Eine lange Reihe kleiner Annehmlichkeiten rundet das Ganze ab — Gruppen für Presets und Prompts, in Charakterkarten mitgelieferte Personas, Rückgängig-Toasts, ein Trace, der zeigt, welche Weltinfo-Einträge ausgelöst wurden und warum, sowie Modelllisten, die live vom jeweiligen Anbieter abgerufen werden. All das ist in der [Dokumentation](https://luker.cups.moe) beschrieben.
 
 ## Screenshots
 

@@ -74,7 +74,7 @@ These modes cover all scenarios from high-end commercial APIs to local small mod
 
 Character Card creators often know best under what parameters their characters perform optimally. Luker allows Character Cards to carry **recommended presets** (with connection fields automatically stripped) and **default personas**. When users load a Character Card, the system automatically applies the creator's recommended configuration and records the previous preset; it automatically restores when leaving the character. In the preset selector, bound presets are identified with a special badge, visually distinguishing them from regular presets.
 
-The Chat Persona Lock feature binds user personas to specific chats, automatically restoring the corresponding persona settings when switching chats. These features are built on the foundation of preset decoupling — precisely because presets are independent entities, they can be referenced and distributed by Character Cards. See [Card-Bound Presets & Personas](/improvements/card-bound-presets) for details.
+Bound presets and personas are saved with the standard Character Card export in PNG or JSON, and importing restores the same bound presets and personas.
 
 ### Request Inspector
 

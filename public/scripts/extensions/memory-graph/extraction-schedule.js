@@ -2,7 +2,8 @@
 // Copyright (C) 2026 FunnyCups (https://github.com/funnycups)
 
 /**
- * Pure helpers controlling per-type extraction cadence and prompt assembly.
+ * Pure helpers controlling per-type extraction cadence, prompt assembly, and
+ * the fate of an in-flight pass when a chat mutation lands.
  *
  * Lives outside main.js so unit tests can import without dragging the whole
  * SillyTavern script.js / lib.js runtime in. main.js re-exports the
@@ -94,4 +95,50 @@ export function buildRoundNodesSection(roundNodes) {
         `    ${JSON.stringify({ created, updated })}`,
         '  </round_nodes>',
     ].join('\n');
+}
+
+/**
+ * Decide what a chat mutation at `fromSeq` does to the scheduled extraction
+ * pass described by `scope`.
+ *
+ * `scope`:
+ *   beginSeq, latestSeq, committedSeq — see `activeExtractionScope`.
+ *   inFlightSeqFrom / inFlightSeqTo — range of the batch currently handed to
+ *     the LLM pipeline, or null between batches.
+ *
+ * Decisions:
+ *   abort_no_metadata   no scope / no seq — conservative abort, as before.
+ *   abort_committed_hit committed work covers the mutated floor; abort and
+ *                       let the store refresh from the settled chat log.
+ *   abort_in_flight_batch
+ *                       the mutated floor belongs to the batch already
+ *                       dispatched. The prompt was built from the launch-time
+ *                       frames snapshot, so lowering `latestSeq` cannot
+ *                       salvage it — the batch must be discarded.
+ *   shrink              the mutation lands in a tail batch that has not been
+ *                       dispatched yet; drop that tail from the upper bound.
+ *   noop                the mutation is past the pass's upper bound.
+ *
+ * @param {{ beginSeq?: number, latestSeq?: number, committedSeq?: number, inFlightSeqFrom?: number|null, inFlightSeqTo?: number|null }|null} scope
+ * @param {number|null|undefined} fromSeq
+ * @returns {'abort_no_metadata'|'abort_committed_hit'|'abort_in_flight_batch'|'shrink'|'noop'}
+ */
+export function classifyExtractionMutation(scope, fromSeq) {
+    const seq = Number(fromSeq);
+    if (!scope || !Number.isFinite(seq) || seq <= 0) {
+        return 'abort_no_metadata';
+    }
+    if (seq <= Number(scope.committedSeq || 0)) {
+        return 'abort_committed_hit';
+    }
+    const inFlightFrom = Number(scope.inFlightSeqFrom);
+    const inFlightTo = Number(scope.inFlightSeqTo);
+    if (Number.isFinite(inFlightFrom) && Number.isFinite(inFlightTo)
+        && seq >= inFlightFrom && seq <= inFlightTo) {
+        return 'abort_in_flight_batch';
+    }
+    if (seq <= Number(scope.latestSeq || 0)) {
+        return 'shrink';
+    }
+    return 'noop';
 }

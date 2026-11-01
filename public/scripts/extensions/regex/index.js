@@ -8,9 +8,9 @@ import { commonEnumProviders, enumIcons } from '../../slash-commands/SlashComman
 import { SlashCommandEnumValue, enumTypes } from '../../slash-commands/SlashCommandEnumValue.js';
 import { SlashCommandParser } from '../../slash-commands/SlashCommandParser.js';
 import { download, equalsIgnoreCaseAndAccents, escapeHtml, getFileText, getSortableDelay, isFalseBoolean, isTrueBoolean, regexFromString, setInfoBlock, uuidv4 } from '../../utils.js';
-import { allowPresetScripts, allowScopedScripts, disallowPresetScripts, disallowScopedScripts, getCurrentPresetAPI, getCurrentPresetName, getRegexScripts, getRuntimeRegexScripts, getScriptsByType, isPresetScriptsAllowed, isScopedScriptsAllowed, regex_placement, RegexProvider, REGEX_RUNTIME_SCRIPTS_CHANGED_EVENT, runRegexScript, saveScriptsByType, SCRIPT_TYPE_UNKNOWN, SCRIPT_TYPES, substitute_find_regex } from './engine.js';
-import { REGEX_ALLOW_SLOW_SCRIPT_EVENT, REGEX_OPEN_SCRIPT_EVENT, resetRegexScriptState } from './redos-reporter.js';
-import { getCurrentLocale, t } from '../../i18n.js';
+import { allowPresetScripts, allowScopedScripts, disallowPresetScripts, disallowScopedScripts, getCurrentPresetAPI, getCurrentPresetName, getPluginLanes, getRegexScripts, getRuntimeRegexScripts, getScriptsByType, isPresetScriptsAllowed, isScopedScriptsAllowed, regex_placement, RegexProvider, REGEX_RUNTIME_SCRIPTS_CHANGED_EVENT, runRegexScript, saveScriptsByType, SCRIPT_TYPE_UNKNOWN, SCRIPT_TYPES, substitute_find_regex } from './engine.js';
+import { REGEX_ALLOW_SLOW_SCRIPT_EVENT, REGEX_HARD_THRESHOLD_MS, REGEX_OPEN_SCRIPT_EVENT, resetAllRegexScriptState, resetRegexScriptState } from './redos-reporter.js';
+import { getCurrentLocale, t, translate } from '../../i18n.js';
 import { accountStorage } from '../../util/AccountStorage.js';
 import { getPresetManager } from '../../preset-manager.js';
 
@@ -101,7 +101,7 @@ function summarizeRegexScriptForLog(script) {
         runOnEdit: Boolean(script.runOnEdit),
         promptOnly: Boolean(script.promptOnly),
         markdownOnly: Boolean(script.markdownOnly),
-        pluginOnly: Boolean(script.pluginOnly),
+        pluginLanes: getPluginLanes(script),
     };
 }
 
@@ -121,7 +121,10 @@ function summarizeRegexEditorDomStateForLog(editorHtml) {
         disabled: Boolean(editorHtml.find('input[name="disabled"]').prop('checked')),
         markdownOnly: Boolean(editorHtml.find('input[name="only_format_display"]').prop('checked')),
         promptOnly: Boolean(editorHtml.find('input[name="only_format_prompt"]').prop('checked')),
-        pluginOnly: Boolean(editorHtml.find('input[name="only_format_plugin"]').prop('checked')),
+        pluginLanes: [
+            editorHtml.find('input[name="plugin_request"]').prop('checked') ? 'request' : null,
+            editorHtml.find('input[name="plugin_reply"]').prop('checked') ? 'reply' : null,
+        ].filter(Boolean),
         runOnEdit: Boolean(editorHtml.find('input[name="run_on_edit"]').prop('checked')),
         minDepthRaw: String(editorHtml.find('input[name="min_depth"]').val() || ''),
         maxDepthRaw: String(editorHtml.find('input[name="max_depth"]').val() || ''),
@@ -931,7 +934,10 @@ async function saveRegexScript(regexScript, existingScriptIndex, scriptType, sav
     if (!Array.isArray(regexScript.placement)) {
         regexScript.placement = [];
     }
-    if (regexScript.placement.length === 0) {
+    const pluginLanes = getPluginLanes(regexScript);
+    if (pluginLanes.includes('request') && regexScript.placement.length === 0) {
+        toastr.warning(t`This regex script will not work on plugin requests, but was saved anyway: select at least one message type.`);
+    } else if (regexScript.placement.length === 0 && pluginLanes.length === 0) {
         toastr.warning(t`This regex script will not work, but was saved anyway: One "Affects" checkbox must be selected!`);
     }
 
@@ -1309,7 +1315,9 @@ function fillRegexEditorFields(editorHtml, script) {
     editorHtml.find('input[name="disabled"]').prop('checked', script.disabled ?? false);
     editorHtml.find('input[name="only_format_display"]').prop('checked', script.markdownOnly ?? false);
     editorHtml.find('input[name="only_format_prompt"]').prop('checked', script.promptOnly ?? false);
-    editorHtml.find('input[name="only_format_plugin"]').prop('checked', script.pluginOnly ?? false);
+    const pluginLanes = getPluginLanes(script);
+    editorHtml.find('input[name="plugin_request"]').prop('checked', pluginLanes.includes('request'));
+    editorHtml.find('input[name="plugin_reply"]').prop('checked', pluginLanes.includes('reply'));
     editorHtml.find('input[name="run_on_edit"]').prop('checked', script.runOnEdit ?? false);
     editorHtml.find('select[name="substitute_regex"]').val(script.substituteRegex ?? substitute_find_regex.NONE);
     editorHtml.find('input[name="min_depth"]').val(script.minDepth ?? '');
@@ -1397,9 +1405,10 @@ async function onRegexEditorOpenClick(existingId, scriptType) {
             .prop('checked', true);
     }
 
-    editorHtml.find('input[name="only_format_plugin"]').on('click input change', function (event) {
-        logEditorState('plugin_only_toggled', {
+    editorHtml.find('input[name="plugin_request"], input[name="plugin_reply"]').on('click input change', function (event) {
+        logEditorState('plugin_lane_toggled', {
             eventType: event.type,
+            inputName: this.name,
             inputChecked: Boolean($(this).prop('checked')),
         });
     });
@@ -1425,7 +1434,7 @@ async function onRegexEditorOpenClick(existingId, scriptType) {
             substituteRegex: Number(editorHtml.find('select[name="substitute_regex"]').val()),
             disabled: false,
             promptOnly: false,
-            pluginOnly: false,
+            pluginLanes: [],
             markdownOnly: false,
             runOnEdit: false,
             minDepth: null,
@@ -1501,7 +1510,10 @@ async function onRegexEditorOpenClick(existingId, scriptType) {
             disabled: editorHtml.find('input[name="disabled"]').prop('checked'),
             markdownOnly: editorHtml.find('input[name="only_format_display"]').prop('checked'),
             promptOnly: editorHtml.find('input[name="only_format_prompt"]').prop('checked'),
-            pluginOnly: editorHtml.find('input[name="only_format_plugin"]').prop('checked'),
+            pluginLanes: [
+                editorHtml.find('input[name="plugin_request"]').prop('checked') ? 'request' : null,
+                editorHtml.find('input[name="plugin_reply"]').prop('checked') ? 'reply' : null,
+            ].filter(Boolean),
             runOnEdit: editorHtml.find('input[name="run_on_edit"]').prop('checked'),
             substituteRegex: Number(editorHtml.find('select[name="substitute_regex"]').val()),
             minDepth: parseInt(String(editorHtml.find('input[name="min_depth"]').val())),
@@ -2397,7 +2409,7 @@ function getPresetEmbeddedRegexSignature(script) {
         disabled: Boolean(script?.disabled),
         markdownOnly: Boolean(script?.markdownOnly),
         promptOnly: Boolean(script?.promptOnly),
-        pluginOnly: Boolean(script?.pluginOnly),
+        pluginLanes: getPluginLanes(script).slice().sort(),
         runOnEdit: Boolean(script?.runOnEdit),
         substituteRegex: Number(script?.substituteRegex ?? substitute_find_regex.NONE),
         minDepth: script?.minDepth ?? null,
@@ -2455,7 +2467,7 @@ function getPresetEmbeddedRegexPreviewData(scripts, presetName, { defaultSelecte
         const flags = [
             script.markdownOnly ? t`Only Format Display` : '',
             script.promptOnly ? t`Only Format Prompt` : '',
-            script.pluginOnly ? t`Only Format Plugin` : '',
+            ...getPluginLanes(script).map(lane => lane === 'request' ? t`Plugin Requests` : t`Plugin Replies`),
             script.runOnEdit ? t`Run on Edit` : '',
         ].filter(Boolean);
 
@@ -2813,6 +2825,17 @@ function setupRegexSortable() {
     }
 }
 
+async function showRegexPerfDetectionHelp() {
+    const container = document.createElement('div');
+    const what = document.createElement('p');
+    what.textContent = t`Every regex script run is timed. A script that takes ${REGEX_HARD_THRESHOLD_MS} ms or longer in a single run is paused for the session and a warning appears, so catastrophic backtracking cannot freeze the chat.`;
+    container.appendChild(what);
+    const off = document.createElement('p');
+    off.textContent = t`When detection is off, scripts still run, but their time is not recorded and they are not paused or reported.`;
+    container.appendChild(off);
+    await callGenericPopup(container, POPUP_TYPE.TEXT, translate('Performance detection', 'ext_regex_perf_detection'), { okButton: t`Got it` });
+}
+
 // Workaround for loading in sequence with other extensions
 // NOTE: Always puts extension at the top of the list, but this is fine since it's static
 export async function init() {
@@ -2822,6 +2845,10 @@ export async function init() {
 
     if (!Array.isArray(extension_settings.regex_presets)) {
         extension_settings.regex_presets = [];
+    }
+
+    if (typeof extension_settings.regex_perf_detection !== 'boolean') {
+        extension_settings.regex_perf_detection = true;
     }
 
     // Manually disable the extension since static imports auto-import the JS file
@@ -2848,6 +2875,21 @@ export async function init() {
     applyCollapsedRegexSections();
     bindRegexSectionCollapse();
     bindRegexReloadOnSettingsClose();
+    $('#regex_perf_detection_toggle')
+        .prop('checked', extension_settings.regex_perf_detection)
+        .on('input', function () {
+            const enabled = !!$(this).prop('checked');
+            extension_settings.regex_perf_detection = enabled;
+            if (!enabled) {
+                resetAllRegexScriptState();
+                void requestRegexChatReload();
+            }
+            saveSettingsDebounced();
+        });
+    $('#regex_perf_detection_help').on('click', function (event) {
+        event.preventDefault();
+        void showRegexPerfDetectionHelp();
+    });
     $('#open_regex_editor').on('click', function () {
         onRegexEditorOpenClick(false, SCRIPT_TYPES.GLOBAL);
     });

@@ -51,4 +51,18 @@ class LukerLogcatTailRotationTest {
         assertFalse(current.exists())
         assertEquals("KEEP", last.readText())
     }
+
+    @Test
+    fun shared_image_lifetime_debug_lines_are_treated_as_noise() {
+        val noise = "10-26 23:19:07.012  4919  5004 E chromium: " +
+            "[ERROR:shared_image_manager.cc(414)] SharedImageLifetimeDebug " +
+            "OnRepresentationDestroyed release depth=1 backing=0x2ea009a7f00"
+
+        assertTrue(LukerLogcatTail.isNoiseLine(noise))
+        assertFalse(
+            LukerLogcatTail.isNoiseLine(
+                "10-26 23:19:07.012  4919  5004 E AndroidRuntime: FATAL EXCEPTION: main",
+            ),
+        )
+    }
 }

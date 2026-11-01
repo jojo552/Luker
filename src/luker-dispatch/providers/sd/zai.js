@@ -139,7 +139,7 @@ export async function dispatchSdZai(ctx) {
             const image = Buffer.from(buffer).toString('base64');
             const format = path.extname(url.pathname).substring(1).toLowerCase() || 'png';
 
-            ctx.inspection.completeImage({ format, sizeBytes: buffer.byteLength });
+            ctx.inspection.completeImage({ format, data: image });
             const encoder = new TextEncoder();
             ctx.emit.chunk(encoder.encode(JSON.stringify({ image, format })));
             ctx.emit.end();

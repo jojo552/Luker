@@ -53,7 +53,7 @@ describe('dispatchSdComfyRunPod', () => {
         expect(payload.format).toBe('png');
         expect(payload.data).toBe('ZmFrZQ==');
         expect(ctx._emitted[ctx._emitted.length - 1].kind).toBe('end');
-        expect(ctx.inspection.completeImage).toHaveBeenCalledWith({ format: 'png' });
+        expect(ctx.inspection.completeImage).toHaveBeenCalledWith({ format: 'png', data: 'ZmFrZQ==' });
 
         const [, init] = ctx.fetch.mock.calls[0];
         expect(init.headers.Authorization).toBe('Bearer sk-runpod-x');

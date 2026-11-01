@@ -134,7 +134,7 @@ Supports GitHub / Discord OAuth login. Administrators can configure storage quot
 - **Backups, storage, and migration** — [back up and restore](/features/user-settings-additions) by data category, inspect [server-side](/features/storage-inspector) and browser-side storage, and move a whole setup to a new device over the LAN.
 - **Structured data for card authors** — [per-message variables](/features/variable-op-log) and the [state system](/features/state-system).
 - **Troubleshooting** — a [log viewer](/features/logging) with frontend and server sources, plus a one-click debug export.
-- **Day-to-day comforts** — [immersive mode, mobile background keep-alive, desktop notifications, lazy media loading](/features/user-settings-additions), undo toasts, per-chat persona locks, collapsible groups for presets and prompts, model lists loaded live from the provider, World Info activation tracing, preset-associated World Info, and plugin-registered regex rules.
+- **Day-to-day comforts** — [immersive mode, mobile background keep-alive, desktop notifications, lazy media loading](/features/user-settings-additions), undo toasts, personas carried by Character Cards, collapsible groups for presets and prompts, model lists loaded live from the provider, World Info activation tracing, preset-associated World Info, and plugin-registered regex rules.
 :::
 
 ## Compatibility

@@ -1,0 +1,138 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 FunnyCups (https://github.com/funnycups)
+
+name: Luker
+options:
+  bundleIdPrefix: com.luker
+  createIntermediateGroups: true
+  deploymentTarget:
+    iOS: "16.0"
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    CLANG_CXX_LANGUAGE_STANDARD: gnu++20
+    ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+    MARKETING_VERSION: "0.0.0"
+    CURRENT_PROJECT_VERSION: "1"
+    SWIFT_OBJC_BRIDGING_HEADER: Luker/Luker-Bridging-Header.h
+    # The NodeMobile headers shipped in the nodejs-mobile-ios runtime zip.
+    HEADER_SEARCH_PATHS: ["$(SRCROOT)/vendor/include/node", "$(SRCROOT)/vendor/include"]
+targets:
+  Luker:
+    type: application
+    platform: iOS
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.luker.app
+    sources:
+      - path: Luker
+        excludes:
+          - "Resources/nodejs-project/**"
+      - path: Luker/Resources/nodejs-project
+        type: folder
+        buildPhase: resources
+    dependencies:
+      - framework: vendor/NodeMobile.xcframework
+        embed: true
+    info:
+      path: Luker/Info.plist
+      properties:
+        CFBundleDisplayName: Luker
+        CFBundleName: Luker
+        CFBundleIdentifier: $(PRODUCT_BUNDLE_IDENTIFIER)
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UIApplicationSupportsIndirectInputEvents: true
+        # The local server listens on the loopback interface only.
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+          # A custom endpoint may be plain http on a LAN. The endpoint editor
+          # is not linked from the UI in this build.
+          NSAllowsArbitraryLoads: true
+          NSAllowsArbitraryLoadsInWebContent: true
+        NSLocalNetworkUsageDescription: Luker connects to a Luker endpoint on your local network.
+        NSCameraUsageDescription: Luker uses the camera for character card backgrounds and vision inputs.
+        NSMicrophoneUsageDescription: Luker uses the microphone for speech-to-text inputs.
+        # Keeps a user-started generation alive after the app moves to the
+        # background. The frontend drives this through LukerIOS.
+        UIBackgroundModes:
+          - processing
+        BGTaskSchedulerPermittedIdentifiers:
+          - com.luker.app.continuedProcessingTask.*
+        CFBundleURLTypes:
+          - CFBundleURLName: com.luker.app
+            CFBundleURLSchemes:
+              - luker
+        # Makes the character-card, lorebook, preset and log extensions
+        # selectable in the system document picker. WebKit filters the picker
+        # by UTI, so an undeclared extension is greyed out even when the page
+        # accepts it.
+        UTImportedTypeDeclarations:
+          - UTTypeIdentifier: com.luker.file.charx
+            UTTypeDescription: Luker Character Card
+            UTTypeConformsTo:
+              - public.data
+            UTTypeTagSpecification:
+              public.filename-extension:
+                - charx
+              public.mime-type:
+                - application/octet-stream
+          - UTTypeIdentifier: com.luker.file.byaf
+            UTTypeDescription: Character File
+            UTTypeConformsTo:
+              - public.data
+            UTTypeTagSpecification:
+              public.filename-extension:
+                - byaf
+              public.mime-type:
+                - application/octet-stream
+          - UTTypeIdentifier: com.luker.file.lorebook
+            UTTypeDescription: Lorebook
+            UTTypeConformsTo:
+              - public.json
+            UTTypeTagSpecification:
+              public.filename-extension:
+                - lorebook
+              public.mime-type:
+                - application/json
+          - UTTypeIdentifier: com.luker.file.settings
+            UTTypeDescription: Luker Settings
+            UTTypeConformsTo:
+              - public.json
+            UTTypeTagSpecification:
+              public.filename-extension:
+                - settings
+              public.mime-type:
+                - application/json
+          - UTTypeIdentifier: com.luker.file.preset
+            UTTypeDescription: Luker Preset
+            UTTypeConformsTo:
+              - public.json
+            UTTypeTagSpecification:
+              public.filename-extension:
+                - preset
+              public.mime-type:
+                - application/json
+          - UTTypeIdentifier: com.luker.file.jsonl
+            UTTypeDescription: JSON Lines
+            UTTypeConformsTo:
+              - public.text
+            UTTypeTagSpecification:
+              public.filename-extension:
+                - jsonl
+              public.mime-type:
+                - application/x-ndjson
+schemes:
+  Luker:
+    build:
+      targets:
+        Luker: all
+    run:
+      config: Debug
+    archive:
+      config: Release

@@ -16,6 +16,7 @@
 [![Docs](https://img.shields.io/badge/docs-luker.cups.moe-orange?style=flat)](https://luker.cups.moe)
 [![Android APK](https://img.shields.io/badge/download-Android%20APK-3ddc84?style=flat&logo=android&logoColor=white)](https://github.com/funnycups/Luker/releases)
 [![HarmonyOS HAP](https://img.shields.io/badge/build-HarmonyOS%20HAP-000000?style=flat)](https://luker.cups.moe/guide/harmonyos)
+[![iOS IPA](https://img.shields.io/badge/download-iOS%20IPA-000000?style=flat&logo=apple&logoColor=white)](https://github.com/funnycups/Luker/releases)
 [![Desktop app](https://img.shields.io/badge/download-Windows%2C%20macOS%20%26%20Linux-0078d4?style=flat)](https://luker.cups.moe/guide/desktop)
 
 </div>
@@ -93,6 +94,14 @@ Luker 백엔드는 HarmonyOS 앱 *안에서*도 실행됩니다. DevEco Studio�
 
 → [HarmonyOS 앱 가이드](https://luker.cups.moe/guide/harmonyos)
 
+### Native iOS 앱 — iPhone과 iPad에서 실행되는 완전한 플랫폼
+
+Luker 백엔드는 iOS 앱 *안에서*도 실행됩니다. 서명되지 않은 IPA를 설치하고 AltStore 또는 SideStore에서 본인의 Apple ID로 서명하면, 기기 한 대에서 완전한 서버와 UI가 실행됩니다 — 터미널도, 수동 Node 설치도, 포트 포워딩도 필요 없습니다.
+
+![iOS 데모](https://raw.githubusercontent.com/funnycups/Luker/release/docs/public/images/branding/ios-demo.gif)
+
+→ [iOS 앱 가이드](https://luker.cups.moe/guide/ios)
+
 ### Native 데스크톱 앱 — Windows, macOS, Linux
 
 Luker 백엔드는 패키징된 데스크톱 앱 *안에서*도 실행됩니다. Releases에서 사용하는 플랫폼에 맞는 설치 파일이나 압축 파일을 내려받아 열고, macOS와 Windows에서는 첫 실행 시 표시되는 보안 경고를 허용하면 완전한 서버와 UI가 네이티브 창에서 실행됩니다 — 터미널도, 수동 Node 설치도, 포트 포워딩도 필요 없습니다.
@@ -139,7 +148,7 @@ SillyTavern에서는 API 연결과 채팅 완성 프리셋이 함께 움직이�
 
 ---
 
-그 밖에도 프리셋 그룹과 프롬프트 그룹, 채팅별 페르소나 잠금, 실행 취소 토스트, 어떤 월드 인포 항목이 왜 발동했는지 보여 주는 트레이스, 각 제공자에서 실시간으로 가져오는 모델 목록 등 자잘한 편의 기능이 이어집니다. 이 모든 내용은 [문서](https://luker.cups.moe)에 설명되어 있습니다.
+그 밖에도 프리셋 그룹과 프롬프트 그룹, 캐릭터 카드에 함께 포함되는 페르소나, 실행 취소 토스트, 어떤 월드 인포 항목이 왜 발동했는지 보여 주는 트레이스, 각 제공자에서 실시간으로 가져오는 모델 목록 등 자잘한 편의 기능이 이어집니다. 이 모든 내용은 [문서](https://luker.cups.moe)에 설명되어 있습니다.
 
 ## 스크린샷
 

@@ -154,6 +154,10 @@ async function enableMgAndSelectRag(page) {
 async function importBindLatest(page, filePath) {
     await openExtensionsDrawer(page);
     await openInlineDrawer(page, 'memory_graph_settings').catch(() => {});
+    // The tabs component persists the last-selected tab in settings, so a
+    // cloned data root may open on any pane. Click through the real tab bar
+    // instead of assuming the Graph pane is already showing.
+    await page.locator('#luker_rpg_memory_tabs button[data-luker-tab-key="graph"]').click();
     await page.locator('#luker_rpg_memory_import').click();
     await page.locator('#luker_rpg_memory_import_file').setInputFiles(filePath);
     const popup = page.locator('.popup:visible').last();

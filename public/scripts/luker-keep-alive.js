@@ -4,8 +4,8 @@
 const SILENT_VIDEO_URL = '/sounds/silent.mp4';
 const SILENT_AUDIO_URL = '/sounds/silent-keepalive.m4a';
 
-/** @typedef {'off'|'android'|'harmony'|'pip'|'audio'} KeepAliveMode */
-/** @typedef {'android'|'harmony'|'web'|'unsupported'} KeepAlivePlatform */
+/** @typedef {'off'|'android'|'harmony'|'ios'|'pip'|'audio'} KeepAliveMode */
+/** @typedef {'android'|'harmony'|'ios'|'web'|'unsupported'} KeepAlivePlatform */
 
 let platform = 'unsupported';
 /** @type {KeepAliveMode} */
@@ -45,6 +45,16 @@ function hasHarmonyKeepAliveBridge() {
         && typeof window.LukerHarmony.setGenerationActive === 'function';
 }
 
+// The iOS shell holds a background task only while the page reports an
+// in-flight generation. The task is best effort: the system may end it at any
+// time, so the page treats this exactly like the HarmonyOS lease.
+function hasIOSKeepAliveBridge() {
+    return typeof window !== 'undefined'
+        && typeof window.LukerIOS === 'object'
+        && window.LukerIOS !== null
+        && typeof window.LukerIOS.setGenerationActive === 'function';
+}
+
 function hasPipSupport() {
     return typeof document !== 'undefined'
         && 'pictureInPictureEnabled' in document
@@ -62,6 +72,7 @@ function hasAudioSupport() {
 function resolvePlatform() {
     if (hasAndroidKeepAliveBridge()) return 'android';
     if (hasHarmonyKeepAliveBridge()) return 'harmony';
+    if (hasIOSKeepAliveBridge()) return 'ios';
     if (hasPipSupport() || hasAudioSupport()) return 'web';
     return 'unsupported';
 }
@@ -285,7 +296,7 @@ export function getActiveKeepAliveMode() {
  * Whether the page runs inside a Luker app shell that provides native keep-alive.
  */
 export function hasNativeKeepAliveBridge() {
-    return hasAndroidKeepAliveBridge() || hasHarmonyKeepAliveBridge();
+    return hasAndroidKeepAliveBridge() || hasHarmonyKeepAliveBridge() || hasIOSKeepAliveBridge();
 }
 
 /**
@@ -333,7 +344,7 @@ export function onKeepAliveStateChanged(callback) {
  * @returns {Promise<KeepAliveMode>} the final mode (may be 'off' if entry failed)
  */
 export async function setKeepAliveMode(desired) {
-    const target = desired === 'android' || desired === 'harmony' || desired === 'pip' || desired === 'audio' ? desired : 'off';
+    const target = desired === 'android' || desired === 'harmony' || desired === 'ios' || desired === 'pip' || desired === 'audio' ? desired : 'off';
 
     // Switching away from the current mode: tear down first.
     if (activeMode === 'pip' && target !== 'pip') {
@@ -354,6 +365,13 @@ export async function setKeepAliveMode(desired) {
             window.LukerHarmony.setGenerationActive(false);
         } catch (error) {
             console.warn('[Luker] Failed to release HarmonyOS background keep-alive', error);
+        }
+    }
+    if (activeMode === 'ios' && target !== 'ios') {
+        try {
+            window.LukerIOS.setGenerationActive(false);
+        } catch (error) {
+            console.warn('[Luker] Failed to release iOS background keep-alive', error);
         }
     }
 
@@ -395,6 +413,22 @@ export async function setKeepAliveMode(desired) {
             return 'harmony';
         } catch (error) {
             console.warn('[Luker] Failed to hold HarmonyOS background keep-alive', error);
+            activeMode = 'off';
+            return 'off';
+        }
+    }
+
+    if (target === 'ios') {
+        if (platform !== 'ios') {
+            activeMode = 'off';
+            return 'off';
+        }
+        try {
+            window.LukerIOS.setGenerationActive(true);
+            activeMode = 'ios';
+            return 'ios';
+        } catch (error) {
+            console.warn('[Luker] Failed to hold iOS background keep-alive', error);
             activeMode = 'off';
             return 'off';
         }

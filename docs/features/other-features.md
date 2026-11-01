@@ -6,11 +6,9 @@ This page lists other user-facing features unique to Luker. While smaller in sco
 
 Luker records the complete chain from matching to injection for World Info entries, helping you debug complex World Info configurations. See [World Info Activation Trace](/features/world-info-trace) for details.
 
-## Chat Persona Lock
+## Card-Bound Personas
 
-Chat Persona Lock allows you to bind a user persona to a specific chat session. When enabled, switching to that chat automatically restores the corresponding persona, and leaving restores the default persona.
-
-This is particularly useful when you use different user identities for different character cards — for example, playing as an "adventurer" in one chat and a "student" in another, without needing to manually switch each time.
+Luker lets a Character Card carry recommended personas and export them with the card itself. When you open the card, Luker switches to the recommended persona if you have not chosen one; if the current persona differs from the card's recommendation, Luker asks whether to switch. See [Card-Bound Presets & Personas](/improvements/card-bound-presets) for details.
 
 ## Chat Tools Panel
 

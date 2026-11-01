@@ -187,29 +187,66 @@ describe('runRagRecall — rewrite + rerank compose', () => {
 });
 
 describe('runRagRecall — early exits', () => {
-    test('empty embedding profile → skip + empty candidates', async () => {
+    test('empty embedding profile rejects instead of returning a cacheable empty result', async () => {
         const { runRagRecall } = await retrieverModulePromise;
-        validateVectorConfigMock.mockReturnValue({ valid: false });
-        const { candidates, meta } = await runRagRecall(makeStore(), 'q', 'chat-1', {}, {});
+        validateVectorConfigMock.mockReturnValue({ valid: false, error: 'No embedding profile selected' });
+        await expect(runRagRecall(makeStore(), 'q', 'chat-1', {}, {}))
+            .rejects.toThrow('No embedding profile selected');
         expect(findSimilarNodesMock).not.toHaveBeenCalled();
-        expect(candidates).toEqual([]);
-        expect(meta.skipReasons.some(r => r.includes('No embedding profile'))).toBe(true);
     });
 
-    test('vector search throws → empty candidates with skip reason, no crash', async () => {
+    test('vector search throws → rejects instead of returning a cacheable empty result', async () => {
         const { runRagRecall } = await retrieverModulePromise;
         findSimilarNodesMock.mockRejectedValue(new Error('embed 500'));
-        const { candidates, meta } = await runRagRecall(makeStore(), 'q', 'chat-1', {}, {});
-        expect(candidates).toEqual([]);
-        expect(meta.skipReasons.some(r => r.includes('Vector search failed'))).toBe(true);
+        await expect(runRagRecall(makeStore(), 'q', 'chat-1', {}, {}))
+            .rejects.toThrow('embed 500');
     });
 
-    test('empty query (after normalize) returns immediately', async () => {
+    test('empty query is a deterministic skip with a machine-readable code', async () => {
         const { runRagRecall } = await retrieverModulePromise;
         const { candidates, meta } = await runRagRecall(makeStore(), '   ', 'chat-1', {}, {});
         expect(findSimilarNodesMock).not.toHaveBeenCalled();
         expect(candidates).toEqual([]);
-        expect(meta.skipReasons.some(r => r.includes('Empty query'))).toBe(true);
+        expect(meta.skipCode).toBe('empty_query');
+    });
+
+    test('store with no nodes is a deterministic skip before embedding the query', async () => {
+        const { runRagRecall } = await retrieverModulePromise;
+        const { candidates, meta } = await runRagRecall({ nodes: {} }, 'q', 'chat-1', {}, {});
+        expect(findSimilarNodesMock).not.toHaveBeenCalled();
+        expect(candidates).toEqual([]);
+        expect(meta.skipCode).toBe('no_graph_nodes');
+    });
+
+    test('store with only archived nodes is a deterministic skip before embedding the query', async () => {
+        const { runRagRecall } = await retrieverModulePromise;
+        const store = makeStore();
+        for (const node of Object.values(store.nodes)) {
+            node.archived = true;
+        }
+        const { candidates, meta } = await runRagRecall(store, 'q', 'chat-1', {}, {});
+        expect(findSimilarNodesMock).not.toHaveBeenCalled();
+        expect(candidates).toEqual([]);
+        expect(meta.skipCode).toBe('no_graph_nodes');
+    });
+
+    test('zero vector hits is a successful empty selection, not a skip', async () => {
+        const { runRagRecall } = await retrieverModulePromise;
+        findSimilarNodesMock.mockResolvedValue([]);
+        const { candidates, meta } = await runRagRecall(makeStore(), 'q', 'chat-1', {}, {});
+        expect(candidates).toEqual([]);
+        expect(meta.skipCode).toBeUndefined();
+        expect(meta.skipReasons).toEqual([]);
+    });
+
+    test('one live node keeps the recall path running', async () => {
+        const { runRagRecall } = await retrieverModulePromise;
+        findSimilarNodesMock.mockResolvedValue([{ nodeId: 'n_a', score: 0.8 }]);
+        const { candidates, meta } = await runRagRecall({ nodes: { n_a: makeStore().nodes.n_a } }, 'q', 'chat-1', {}, {});
+        expect(findSimilarNodesMock).toHaveBeenCalledTimes(1);
+        expect(candidates.map(c => c.nodeId)).toEqual(['n_a']);
+        expect(meta.skipReasons).toEqual([]);
+        expect(meta.skipCode).toBeUndefined();
     });
 
     test('abort signal mid-call propagates AbortError', async () => {

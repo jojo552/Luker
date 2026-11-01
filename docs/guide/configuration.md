@@ -88,8 +88,10 @@ perUserBasicAuth: false
 ```
 
 - `enableUserAccounts`: Enables the multi-user account system, giving each user an independent data directory
-- `enableDiscreetLogin`: Enables discreet login mode
+- `enableDiscreetLogin`: Hides the account list on the login page; users enter their handle manually
 - `perUserBasicAuth`: Enables independent HTTP Basic authentication for each user
+
+The multi-user system also provides self-service registration, GitHub OAuth and Discord OAuth. Configure them in the admin panel under "Auth & Limits"; see [Authentication and Security](/guide/authentication).
 
 ### Password Reset
 
@@ -118,7 +120,7 @@ sso:
   authentikAuth: false
 ```
 
-Luker supports single sign-on through reverse proxy authentication solutions like Authelia or Authentik. For detailed configuration, see [Authentication and Quotas](/improvements/auth-and-quota).
+Luker supports single sign-on through reverse proxy authentication solutions like Authelia or Authentik. For detailed configuration, see [Authentication and Security](/guide/authentication).
 
 ### Host Whitelist
 

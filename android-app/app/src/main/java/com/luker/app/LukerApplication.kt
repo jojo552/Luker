@@ -68,6 +68,7 @@ class LukerApplication : Application() {
 
     private fun initDebugRecording() {
         runCatching {
+            LukerDebugTrail.attach(filesDir)
             LukerDebugTrail.append(
                 "native",
                 "process onCreate pid=${android.os.Process.myPid()} uid=${android.os.Process.myUid()}",

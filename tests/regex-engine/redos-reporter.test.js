@@ -48,6 +48,7 @@ async function flushAsync() {
 beforeEach(() => {
     callGenericPopup.mockClear();
     nextPopupResult = POPUP_RESULT.CUSTOM1;
+    reporter.resetAllRegexScriptState();
 });
 
 describe('regex slow-script reporter', () => {
@@ -104,5 +105,17 @@ describe('regex slow-script reporter', () => {
         expect(reporter.isRegexScriptPaused('reset-flag')).toBe(false);
         await flushAsync();
         expect(callGenericPopup).toHaveBeenCalledTimes(1);
+    });
+
+    test('resetAllRegexScriptState releases paused scripts and drops their stats', async () => {
+        const script = { id: 'reset-all', scriptName: 'Reset all', findRegex: '/a+/' };
+        reporter.recordRegexExecution(script, HARD + 100);
+        expect(reporter.isRegexScriptPaused('reset-all')).toBe(true);
+        expect(reporter.getRegexScriptStats('reset-all')).toBeTruthy();
+
+        reporter.resetAllRegexScriptState();
+
+        expect(reporter.isRegexScriptPaused('reset-all')).toBe(false);
+        expect(reporter.getRegexScriptStats('reset-all')).toBeUndefined();
     });
 });

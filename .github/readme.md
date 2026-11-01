@@ -16,6 +16,7 @@
 [![Docs](https://img.shields.io/badge/docs-luker.cups.moe-orange?style=flat)](https://luker.cups.moe)
 [![Android APK](https://img.shields.io/badge/download-Android%20APK-3ddc84?style=flat&logo=android&logoColor=white)](https://github.com/funnycups/Luker/releases)
 [![HarmonyOS HAP](https://img.shields.io/badge/build-HarmonyOS%20HAP-000000?style=flat)](https://luker.cups.moe/guide/harmonyos)
+[![iOS IPA](https://img.shields.io/badge/download-iOS%20IPA-000000?style=flat&logo=apple&logoColor=white)](https://github.com/funnycups/Luker/releases)
 [![Desktop app](https://img.shields.io/badge/download-Windows%2C%20macOS%20%26%20Linux-0078d4?style=flat)](https://luker.cups.moe/guide/desktop)
 
 </div>
@@ -93,6 +94,14 @@ The Luker backend also runs inside a HarmonyOS app. Build the HAP from source wi
 
 → [HarmonyOS app guide](https://luker.cups.moe/guide/harmonyos)
 
+### Native iOS app — the full platform on your iPhone and iPad
+
+The Luker backend also runs *inside* an iOS app. Install the unsigned IPA, sign it with your own Apple ID through AltStore or SideStore, and the full server and UI run on a single device — no terminal, no manual Node install, no port forwarding.
+
+![iOS demo](https://raw.githubusercontent.com/funnycups/Luker/release/docs/public/images/branding/ios-demo.gif)
+
+→ [iOS app guide](https://luker.cups.moe/guide/ios)
+
 ### Native desktop app — Windows, macOS, and Linux
 
 The Luker backend also runs *inside* a packaged desktop app. Download the installer or the archive for your platform from Releases, open it, allow it past the first-launch security prompt on macOS and Windows, and the full server and UI run in a native window — no terminal, no Node install, no port forwarding.
@@ -139,7 +148,7 @@ Generation runs on the backend, streamed to the UI over WebSocket. Reload the ta
 
 ---
 
-A long tail of smaller conveniences rounds it out — grouping for presets and prompts, per-chat persona locks, undo toasts, a trace of which World Info entries fired and why, model lists fetched live from each provider. All of them are documented on the [docs site](https://luker.cups.moe).
+A long tail of smaller conveniences rounds it out — grouping for presets and prompts, personas carried by Character Cards, undo toasts, a trace of which World Info entries fired and why, model lists fetched live from each provider. All of them are documented on the [docs site](https://luker.cups.moe).
 
 ## Screenshots
 

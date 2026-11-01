@@ -87,7 +87,7 @@ export async function dispatchSdChutes(ctx) {
         const buffer = await result.arrayBuffer();
         const base64 = Buffer.from(buffer).toString('base64');
 
-        ctx.inspection.completeImage({ sizeBytes: buffer.byteLength });
+        ctx.inspection.completeImage({ format: 'jpg', data: base64 });
 
         const encoder = new TextEncoder();
         ctx.emit.chunk(encoder.encode(JSON.stringify({ image: base64 })));

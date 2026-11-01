@@ -107,7 +107,7 @@ export async function dispatchSdTogether(ctx) {
             b64_json = Buffer.from(buffer).toString('base64');
         }
 
-        ctx.inspection.completeImage({ format: 'jpg', sizeBytes: Math.round(b64_json.length * 0.75) });
+        ctx.inspection.completeImage({ format: 'jpg', data: b64_json });
         const payload = { format: 'jpg', data: b64_json };
         const encoder = new TextEncoder();
         ctx.emit.chunk(encoder.encode(JSON.stringify(payload)));

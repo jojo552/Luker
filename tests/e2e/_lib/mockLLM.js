@@ -167,6 +167,7 @@ function waitForCloseOrTimeout(res, ms) {
  *   clearDirectorRun:()=>void,
  *   scriptCompletion:(route:Function|null)=>void,
  *   clearScriptedCompletion:()=>void,
+ *   setChatCompletionFailure:(fn:Function|null)=>void,
  *   requests:object[],
  *   stop:()=>Promise<void>,
  * }>}
@@ -223,6 +224,15 @@ export async function startMockLLM({ scriptedReplies = [], scriptedToolCalls = [
     function setGenericRoute(fn) {
         genericRoute = typeof fn === 'function' ? fn : null;
         genericTurn = 0;
+    }
+
+    // Per-request chat-completion failure injection. The predicate receives
+    // the parsed request and returns `{status, body}` to fail it, or null to
+    // let it through. Used by specs that need one subsystem (e.g. recall's
+    // tool-call LLM) to fail while the main chat generation still answers.
+    let chatCompletionFailure = null;
+    function setChatCompletionFailure(fn) {
+        chatCompletionFailure = typeof fn === 'function' ? fn : null;
     }
 
     function classifyRequest(parsed) {
@@ -399,6 +409,15 @@ export async function startMockLLM({ scriptedReplies = [], scriptedToolCalls = [
 
         // Chat completions.
         if (req.url.endsWith('/chat/completions') || req.url.endsWith('/v1/chat/completions')) {
+            if (chatCompletionFailure) {
+                const failure = chatCompletionFailure({ parsed, url: req.url, headers: req.headers });
+                if (failure) {
+                    res.writeHead(Number(failure.status) || 500, { 'content-type': 'text/plain' });
+                    res.end(String(failure.body ?? 'upstream error'));
+                    return;
+                }
+            }
+
             // Director routing has priority over the queue when:
             //   (a) a director router was registered AND
             //   (b) the incoming request can be classified as director-main
@@ -688,6 +707,7 @@ export async function startMockLLM({ scriptedReplies = [], scriptedToolCalls = [
         clearDirectorRun() { setDirectorRoute(null); },
         scriptCompletion(route) { setGenericRoute(route); },
         clearScriptedCompletion() { setGenericRoute(null); },
+        setChatCompletionFailure(fn) { setChatCompletionFailure(fn); },
         failNextResponses,
         requests,
         stop: () => new Promise((resolve) => server.close(() => resolve())),

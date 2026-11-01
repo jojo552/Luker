@@ -16,6 +16,7 @@
 [![Docs](https://img.shields.io/badge/docs-luker.cups.moe-orange?style=flat)](https://luker.cups.moe)
 [![Android APK](https://img.shields.io/badge/download-Android%20APK-3ddc84?style=flat&logo=android&logoColor=white)](https://github.com/funnycups/Luker/releases)
 [![HarmonyOS HAP](https://img.shields.io/badge/build-HarmonyOS%20HAP-000000?style=flat)](https://luker.cups.moe/guide/harmonyos)
+[![iOS IPA](https://img.shields.io/badge/download-iOS%20IPA-000000?style=flat&logo=apple&logoColor=white)](https://github.com/funnycups/Luker/releases)
 [![Desktop app](https://img.shields.io/badge/download-Windows%2C%20macOS%20%26%20Linux-0078d4?style=flat)](https://luker.cups.moe/guide/desktop)
 
 </div>
@@ -93,6 +94,14 @@ Luker построен на базе [SillyTavern](https://github.com/SillyTaver
 
 → [Руководство по приложению для HarmonyOS](https://luker.cups.moe/guide/harmonyos)
 
+### Нативное приложение для iOS — вся платформа на iPhone и iPad
+
+Бэкенд Luker также работает *внутри* приложения для iOS. Установите неподписанную IPA, подпишите её своим Apple ID через AltStore или SideStore — и полноценный сервер вместе с интерфейсом будет работать на одном устройстве, без терминала, без ручной установки Node и без проброса портов.
+
+![Демонстрация iOS](https://raw.githubusercontent.com/funnycups/Luker/release/docs/public/images/branding/ios-demo.gif)
+
+→ [Руководство по приложению для iOS](https://luker.cups.moe/guide/ios)
+
 ### Нативное приложение для десктопа — Windows, macOS и Linux
 
 Бэкенд Luker также работает *внутри* упакованного приложения для десктопа. Скачайте установщик или архив для своей платформы со страницы Releases, откройте его и разрешите предупреждение безопасности при первом запуске в macOS и Windows — полноценный сервер вместе с интерфейсом заработает в нативном окне, без терминала, без ручной установки Node и без проброса портов.
@@ -139,7 +148,7 @@ Luker построен на базе [SillyTavern](https://github.com/SillyTaver
 
 ---
 
-Завершает картину длинный хвост мелких удобств — группировка пресетов и промптов, блокировка персоны в чате, уведомления с отменой, трассировка того, какие записи Информации о мире сработали и почему, списки моделей, подгружаемые в реальном времени от каждого провайдера. Всё это описано в [документации](https://luker.cups.moe).
+Завершает картину длинный хвост мелких удобств — группировка пресетов и промптов, персоны, экспортируемые вместе с карточками персонажей, уведомления с отменой, трассировка того, какие записи Информации о мире сработали и почему, списки моделей, подгружаемые в реальном времени от каждого провайдера. Всё это описано в [документации](https://luker.cups.moe).
 
 ## Скриншоты
 

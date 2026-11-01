@@ -108,6 +108,20 @@ export function resetRegexScriptState(scriptId) {
 }
 
 /**
+ * Clears session detection state for every script. Called when performance
+ * detection is turned off so scripts paused by an earlier execution can run
+ * again and pending warnings do not surface.
+ *
+ * @returns {void}
+ */
+export function resetAllRegexScriptState() {
+    pausedScripts.clear();
+    popupShownScripts.clear();
+    stats.clear();
+    popupQueue.length = 0;
+}
+
+/**
  * @param {string|null|undefined} scriptId
  * @returns {RegexScriptStats|undefined}
  */

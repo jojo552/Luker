@@ -95,3 +95,71 @@
 .configEditorTab .runtimeConfigPath {
     word-break: break-all;
 }
+
+.adminTabs {
+    text-align: start;
+}
+
+.adminTabs .adminNav {
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.adminTabs .authAndQuotaTab {
+    gap: 16px;
+}
+
+.adminSettingsSection {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 14px;
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: 8px;
+    background-color: var(--black30a);
+}
+
+.adminSettingsSectionTitle {
+    margin: 0;
+}
+
+.adminSettingsField {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.adminSettingsFieldLabel {
+    font-size: 0.9em;
+    opacity: 0.9;
+}
+
+.adminSettingsField .text_pole {
+    margin: 0;
+}
+
+.adminSettingsNumberInput {
+    max-width: 12em;
+}
+
+.adminSettingsToggle {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    cursor: pointer;
+}
+
+.adminSettingsToggle input[type="checkbox"] {
+    flex-shrink: 0;
+    margin: 2px 0 0;
+}
+
+.adminSettingsHint {
+    line-height: 1.4;
+    opacity: 0.8;
+}
+
+.adminSettingsActions {
+    display: flex;
+    justify-content: flex-end;
+}

@@ -109,7 +109,7 @@ export async function dispatchSdAimlapi(ctx) {
             throw new Error('Unsupported image format');
         }
 
-        ctx.inspection.completeImage({ format: 'png', sizeBytes: Math.round(base64.length * 0.75) });
+        ctx.inspection.completeImage({ format: 'png', data: base64 });
 
         const encoder = new TextEncoder();
         ctx.emit.chunk(encoder.encode(JSON.stringify({ format: 'png', data: base64 })));

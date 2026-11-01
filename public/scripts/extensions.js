@@ -202,6 +202,8 @@ export const extension_settings = {
     regex: [],
     /** @type {import('./extensions/regex/index.js').RegexPreset[]} */
     regex_presets: [],
+    /** Whether slow regex scripts are detected, paused, and reported. */
+    regex_perf_detection: true,
     /** @type {string[]} */
     character_allowed_regex: [],
     /** @type {Record<string, string[]>} */

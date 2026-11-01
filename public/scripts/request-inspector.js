@@ -754,6 +754,13 @@ function buildChatDetailHtml(detail) {
 
 function buildImageDetailHtml(detail) {
     const dims = (detail.width && detail.height) ? `${detail.width} \u00D7 ${detail.height}` : '\u2014';
+    const outputImage = responsePartToImage(detail.outputImage);
+    const outputImageSection = outputImage
+        ? `<div class="ri-detail-section">
+ <h4>${t`Output Image`}</h4>
+ <div class="ri-msg-images">${imageToHtml(outputImage)}</div>
+ </div>`
+        : '';
 
     const endpointRow = detail.endpoint
         ? `<tr><td>${t`Endpoint URL`}</td><td class="ri-mono" title="${escapeHtml(detail.endpoint)}">${escapeHtml(detail.endpoint)}</td></tr>`
@@ -797,6 +804,8 @@ function buildImageDetailHtml(detail) {
  </table>
  </div>
  </div>
+
+ ${outputImageSection}
 
  <div class="ri-detail-section">
  <h4>${t`Prompt`}</h4>

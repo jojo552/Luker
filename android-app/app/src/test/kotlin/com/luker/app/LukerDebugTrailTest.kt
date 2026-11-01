@@ -7,10 +7,16 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
+import java.io.File
 import java.lang.reflect.Field
 
 class LukerDebugTrailTest {
+    @get:Rule
+    val tmp = TemporaryFolder()
+
     @After
     fun tearDown() {
         LukerDebugTrail.resetForTest()
@@ -68,5 +74,42 @@ class LukerDebugTrailTest {
         LukerDebugTrail.append("category-only", "")
         val dump = LukerDebugTrail.dumpAll().trimEnd()
         assertEquals(2, dump.lineSequence().count())
+    }
+
+    @Test
+    fun attach_keeps_the_trail_across_process_death() {
+        val dir = tmp.newFolder()
+        LukerDebugTrail.attach(dir)
+        LukerDebugTrail.append("native", "before-the-crash")
+
+        val persisted = File(dir, "debug-trail.log").readText()
+        assertTrue(persisted, persisted.contains("native before-the-crash"))
+        assertEquals(persisted, LukerDebugTrail.readPersisted())
+    }
+
+    @Test
+    fun file_sink_rotates_instead_of_growing_without_bound() {
+        val dir = tmp.newFolder()
+        LukerDebugTrail.attach(dir)
+        val payload = "x".repeat(900)
+        repeat(1300) { LukerDebugTrail.append("console", payload) }
+
+        val current = File(dir, "debug-trail.log")
+        val rotated = File(dir, "debug-trail.old.log")
+        assertTrue("current trail should still exist", current.isFile)
+        assertTrue("trail should have rotated once past the cap", rotated.isFile)
+        assertTrue("rotated trail should carry the earliest lines", rotated.length() > 0L)
+        assertTrue("current trail should stay near the cap", current.length() <= 2L * 1024 * 1024)
+    }
+
+    @Test
+    fun reset_detaches_the_file_sink() {
+        val dir = tmp.newFolder()
+        LukerDebugTrail.attach(dir)
+        LukerDebugTrail.resetForTest()
+        LukerDebugTrail.append("native", "after-reset")
+
+        assertFalse(File(dir, "debug-trail.log").exists())
+        assertTrue(LukerDebugTrail.readPersisted().isEmpty())
     }
 }

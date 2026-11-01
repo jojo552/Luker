@@ -146,7 +146,7 @@ export async function dispatchSdFalai(ctx) {
 
                 const fetchData = await imageFetch.arrayBuffer();
                 const image = Buffer.from(fetchData).toString('base64');
-                ctx.inspection.completeImage({ sizeBytes: fetchData.byteLength });
+                ctx.inspection.completeImage({ format: 'jpg', data: image });
 
                 const encoder = new TextEncoder();
                 ctx.emit.chunk(encoder.encode(JSON.stringify({ image })));

@@ -34,7 +34,7 @@ function collectClientPayload() {
 }
 
 export async function downloadDebugBundle() {
-    const bridge = typeof window !== 'undefined' ? window.LukerAndroid : null;
+    const bridge = typeof window !== 'undefined' ? (window.LukerIOS || window.LukerAndroid) : null;
     if (bridge && typeof bridge.exportDiagnosticsBundle === 'function') {
         try {
             bridge.exportDiagnosticsBundle();

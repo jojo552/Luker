@@ -9,6 +9,15 @@ import { ImmersiveManager } from '../ImmersiveManager';
 import { KeepAliveManager } from '../KeepAliveManager';
 import { launchInProcessEarly, prepareDataDir } from '../BackendLauncher';
 import { LastExit, recordLastExit } from '../crash/LastExit';
+import { AppConfig } from '../AppConfig';
+import { RuntimeNotification } from '../RuntimeNotification';
+import {
+  ACTION_OPEN_ENDPOINT_SETTINGS,
+  ACTION_RELOAD_WEBVIEW,
+  STORAGE_CUSTOM_ENDPOINT,
+  STORAGE_PENDING_ACTION,
+  STORAGE_SERVER_URL,
+} from '../AppActions';
 
 const TAG: string = 'LukerEntryAbility';
 const DOMAIN: number = 0xE1EC;
@@ -16,6 +25,12 @@ const DOMAIN: number = 0xE1EC;
 export default class EntryAbility extends UIAbility {
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     KeepAliveManager.attach(this.context);
+    AppConfig.attach(this.context);
+    RuntimeNotification.attach(this.context);
+    const customEndpoint: boolean = AppConfig.usesCustomEndpoint();
+    AppStorage.setOrCreate(STORAGE_SERVER_URL, AppConfig.resolveBaseUrl());
+    AppStorage.setOrCreate(STORAGE_CUSTOM_ENDPOINT, customEndpoint);
+    this.applyWantAction(want);
     // The debug switch is process-wide and only covers renderer processes
     // created after it is set, so it has to be armed before the page loads.
     try {
@@ -39,7 +54,22 @@ export default class EntryAbility extends UIAbility {
       prepareDataDir(this.context);
       return;
     }
+    if (customEndpoint) {
+      hilog.info(DOMAIN, TAG, 'custom endpoint configured; local backend skipped');
+      return;
+    }
     launchInProcessEarly(this.context as common.UIAbilityContext);
+  }
+
+  onNewWant(want: Want, launchParam: AbilityConstant.LaunchParam): void {
+    this.applyWantAction(want);
+  }
+
+  private applyWantAction(want: Want): void {
+    const action: string = want.action ?? '';
+    if (action === ACTION_OPEN_ENDPOINT_SETTINGS || action === ACTION_RELOAD_WEBVIEW) {
+      AppStorage.setOrCreate(STORAGE_PENDING_ACTION, action);
+    }
   }
 
   onWindowStageCreate(windowStage: window.WindowStage): void {
@@ -57,13 +87,16 @@ export default class EntryAbility extends UIAbility {
 
   onForeground(): void {
     KeepAliveManager.setInBackground(false);
+    RuntimeNotification.setForeground(true);
   }
 
   onBackground(): void {
     KeepAliveManager.setInBackground(true);
+    RuntimeNotification.setForeground(false);
   }
 
   onDestroy(): void {
+    RuntimeNotification.exit();
     KeepAliveManager.release();
     BackendManager.killBackend();
   }

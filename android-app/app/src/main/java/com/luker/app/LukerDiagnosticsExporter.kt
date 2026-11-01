@@ -34,7 +34,10 @@ object LukerDiagnosticsExporter {
      * - bootstrap.log (last MAX_BOOTSTRAP_LOG_BYTES bytes if larger)
      * - luker-last-jvm-crash.txt, luker-last-crash-report.txt,
      *   luker-last-webview-crash-report.txt, luker-last-native-tombstone.pb
-     *   from `filesDir/` (whichever exist)
+     *   from `filesDir/` (whichever exist), plus exit-history.txt with every
+     *   ApplicationExitInfo record the system still holds
+     * - debug-trail.txt from the on-disk trail, which survives the run that
+     *   produced the crash
      * - every `report.*.json` and `*.heapsnapshot` Node wrote to the runtime
      *   root (newest first)
      *
@@ -61,12 +64,20 @@ object LukerDiagnosticsExporter {
                 writeFileEntry(zip, "crashes/${file.name}", file)
             }
 
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                val exitHistory = runCatching { LukerCrashCapture.collectExitHistory(context) }
+                    .getOrElse { "exit-history: <failed: ${it.message ?: it.javaClass.simpleName}>" }
+                writeEntry(zip, "crashes/exit-history.txt", exitHistory.toByteArray(Charsets.UTF_8))
+            }
+
             for (file in LukerRuntimeManager.listNodeDiagnosticArtifacts(context)) {
                 writeFileEntry(zip, "node/${file.name}", file)
             }
 
-            val trail = runCatching { LukerDebugTrail.dumpAll() }.getOrDefault("")
+            val trail = runCatching { LukerDebugTrail.readPersisted() }.getOrDefault("")
+                .ifEmpty { runCatching { LukerDebugTrail.dumpAll() }.getOrDefault("") }
             writeEntry(zip, "debug-trail.txt", trail.toByteArray(Charsets.UTF_8))
+            LukerDebugTrail.rotatedTrailFile()?.let { writeFileEntry(zip, "debug-trail.old.log", it) }
 
             val currentLogcat = LukerLogcatTail.currentLogFile(context)
             if (currentLogcat.isFile) {

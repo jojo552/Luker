@@ -144,7 +144,11 @@ describe('dispatchSdComfy', () => {
         // base64 of 0x89 0x50 0x4E 0x47
         expect(Buffer.from(payload.data, 'base64')).toEqual(Buffer.from([137, 80, 78, 71]));
         expect(ctx._emitted[ctx._emitted.length - 1].kind).toBe('end');
-        expect(ctx.inspection.completeImage).toHaveBeenCalledWith(expect.objectContaining({ format: 'png' }));
+        expect(ctx.inspection.completeImage).toHaveBeenCalledWith({
+            format: 'png',
+            sizeBytes: 4,
+            data: payload.data,
+        });
     });
 
     test('/interrupt fired on abort mid-generation', async () => {

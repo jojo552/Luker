@@ -1,0 +1,48 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later
+   Copyright (C) 2026 FunnyCups (https://github.com/funnycups) */
+
+"loading_runtime" = "正在啟動本地 Luker 服務…";
+"loading_webview" = "服務已啟動，正在載入介面…";
+"loading_failed_with_reason" = "服務啟動失敗：%@";
+"loading_failed_timeout" = "服務啟動逾時：本地服務未在預期時間內就緒。";
+"runtime_failure_reason_node_exited" = "Node 行程在服務就緒前退出。";
+
+"runtime_start_error_node_exit_code" = "Node 行程退出，返回碼 %ld";
+"runtime_start_error_no_available_port" = "在連接埠範圍 %ld..%ld 內沒有可用連接埠";
+"runtime_failure_reason_unknown_error" = "未知錯誤";
+
+"diagnostics_export_bundle" = "匯出診斷壓縮包";
+"diagnostics_export_bundle_short" = "匯出";
+"diagnostics_export_failed_title" = "診斷包匯出失敗";
+"diagnostics_export_failed" = "診斷包匯出失敗：%@";
+"crash_dialog_close" = "關閉";
+
+"crash_report_dialog_title" = "偵測到上次異常退出";
+"crash_report_dialog_intro" = "應用程式在上次執行時異常退出。點擊「匯出診斷壓縮包」儲存診斷壓縮檔並回報給開發者；完整報告在壓縮檔內的 crashes/ 目錄下。";
+"webview_crash_dialog_title" = "網頁介面崩潰";
+"webview_crash_dialog_intro" = "網頁介面渲染處理程序已終止。點擊「匯出診斷壓縮包」儲存診斷壓縮檔並回報給開發者；完整報告在壓縮檔內的 crashes/ 目錄下。關閉此對話框後介面將自動重載。";
+"safe_mode_tripped_toast" = "上次啟動在服務就緒前已失敗。本次啟動已停用所有第三方擴充功能——請到擴充功能頁面逐個啟用，定位問題擴充功能。";
+
+"endpoint_dialog_title" = "設定服務端點";
+"endpoint_dialog_message" = "預設端點使用應用程式內建的本地服務。儲存自訂的 http(s):// 端點後，後續啟動將直接連線到該端點，不再自動啟動本地服務。";
+"endpoint_dialog_hint" = "http://192.168.1.20:8000";
+"endpoint_dialog_save" = "儲存";
+"endpoint_dialog_reset" = "重設預設端點";
+"endpoint_invalid_url" = "請輸入有效的 http(s) 端點";
+"endpoint_saved" = "端點已更新";
+"endpoint_reset_default_done" = "已恢復預設本地端點";
+"endpoint_restart_required" = "已切換到端點：%@。重新啟動 Luker 後生效。";
+"endpoint_restart_required_plain" = "重新啟動 Luker 後端點改動生效。";
+
+"keepalive_task_title" = "Luker";
+"keepalive_task_subtitle" = "正在生成回覆";
+"retry" = "重試";
+"close" = "關閉";
+"ok" = "好";
+"cancel" = "取消";
+"no_app_can_open_link" = "沒有可開啟此連結的應用程式";
+
+"download_saved" = "檔案已儲存：%@";
+"download_saved_fallback_name" = "檔案";
+"download_share" = "分享";
+"download_failed" = "下載失敗，請重試。";

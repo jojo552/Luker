@@ -88,8 +88,10 @@ perUserBasicAuth: false
 ```
 
 - `enableUserAccounts`：启用多用户账户系统，每个用户拥有独立的数据目录
-- `enableDiscreetLogin`：启用隐蔽登录模式
+- `enableDiscreetLogin`：登录页不列出账户，用户手动输入账号
 - `perUserBasicAuth`：为每个用户启用独立的 HTTP Basic 认证
+
+多用户模式下还提供登录页自助注册、GitHub OAuth 与 Discord OAuth，配置入口在管理面板的「认证与限额」，详见[认证与安全](/zh-CN/guide/authentication)。
 
 ### 密码重置
 
@@ -118,7 +120,7 @@ sso:
   authentikAuth: false
 ```
 
-Luker 支持通过 Authelia 或 Authentik 等反向代理认证方案实现单点登录。详细配置请参阅 [认证与配额](/zh-CN/improvements/auth-and-quota)。
+Luker 支持通过 Authelia 或 Authentik 等反向代理认证方案实现单点登录。详细配置请参阅[认证与安全](/zh-CN/guide/authentication)。
 
 ### 主机白名单
 

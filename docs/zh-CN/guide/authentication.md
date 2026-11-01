@@ -68,7 +68,7 @@ node recover.js default-user
 enableDiscreetLogin: true
 ```
 
-启用后，登录页面不会显示明显的 Luker 标识，适用于需要低调部署的场景。
+启用后，登录页不再列出已有账户，用户手动输入账号与密码，账户名不会暴露给访客。
 
 ## 自助注册
 
@@ -107,6 +107,24 @@ Luker 同样支持 Discord OAuth 登录，并提供更细粒度的访问控制�
 ::: tip
 如果不需要 OAuth 登录，无需在管理面板中启用 OAuth。Luker 仍然支持上述的 Basic Auth 和多用户账户认证方式。
 :::
+
+## SSO 单点登录
+
+启用多用户账户后，Luker 可以自动登录由反向代理完成认证的用户：
+
+```yaml
+sso:
+  autheliaAuth: true
+  authentikAuth: false
+  trustedProxies:
+    - 127.0.0.1
+    - ::1
+```
+
+- Authelia 通过 `Remote-User` 请求头传入用户名。
+- Authentik 通过 `X-Authentik-Username` 请求头传入用户名。
+
+请求头的值必须与已有且已启用账户的 handle 一致，Luker 不会通过 SSO 创建账户。`sso.trustedProxies` 列出允许传入用户身份的代理地址，来自其他地址的请求会忽略该请求头。设为 `['*']` 会信任所有客户端，仅在代理是唯一入口时使用。
 
 ## 存储配额管理
 
