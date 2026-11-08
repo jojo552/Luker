@@ -479,6 +479,62 @@ export function applyPresetBodyChangesToSettings(previousBody, nextBody) {
         }
     }
 }
+
+/**
+ * Push the current `oai_settings` values into the preset editor controls.
+ * Used after an external save applies a preset body to settings: the save
+ * path does not run the selector-change handler that normally performs this
+ * synchronization.
+ */
+function syncOpenAIPresetControlsFromSettings() {
+    for (const [presetKey, [selector, settingsKey, isCheckbox, isConnection]] of Object.entries(settingsToUpdate)) {
+        if (isConnection || isConnectionProfileOnlyPresetField(presetKey)) {
+            continue;
+        }
+        if (!selector || selector === '#NULL_SELECTOR') {
+            continue;
+        }
+        const value = oai_settings[settingsKey];
+        if (value === undefined) {
+            continue;
+        }
+        if (isCheckbox) {
+            $(selector).prop('checked', Boolean(value));
+        } else {
+            $(selector).val(value);
+        }
+    }
+}
+
+/**
+ * Bring the live runtime in line with the active card-bound preset after it
+ * was saved through the public preset API. Persisting the card slot alone
+ * leaves the runtime option cache, `oai_settings`, and the rendered controls
+ * on the previous body, so the edit only becomes visible after a reload.
+ *
+ * Callers invoke this only when the saved ref is the currently selected
+ * preset, which makes the name-based runtime-cache refresh unambiguous.
+ *
+ * @param {object} options
+ * @param {string} options.name Saved preset name.
+ * @param {object} options.previousBody Card body before the save.
+ * @param {object} options.body Card body after the save.
+ * @returns {Promise<boolean>} false when the name is empty
+ */
+export async function syncSavedCharacterBoundPreset({ name, previousBody, body }) {
+    const targetName = String(name || '').trim();
+    if (!targetName) {
+        return false;
+    }
+
+    refreshCharacterBoundPresetRuntimeBody(targetName, body);
+    applyPresetBodyChangesToSettings(previousBody, body);
+    syncOpenAIPresetControlsFromSettings();
+    await syncOpenAIPresetUiAfterApply();
+    saveSettingsDebounced(0, { directSave: true });
+    scheduleOpenAIPresetChangeNotifications(targetName);
+    return true;
+}
 let lastOpenAIPresetSelectValue = '';
 
 function scheduleOpenAIPresetChangeNotifications(presetName) {
@@ -4427,6 +4483,12 @@ async function attemptPlainTextFunctionCallRetry({
                 return { responseData: currentResponseData, inspection: currentInspection };
             }
         } catch (error) {
+            // An abort is terminal. Returning the previous response here
+            // would swallow a user stop (or a request-inspector abort) and
+            // let the caller persist a reply the user already cancelled.
+            if (error?.name === 'AbortError' || signal?.aborted) {
+                throw error;
+            }
             console.warn('[openai] Plain-text function-call retry request failed', error);
             return { responseData: currentResponseData, inspection: currentInspection };
         }
@@ -4672,6 +4734,12 @@ async function sendOpenAIRequest(type, messages, signal, {
                         }));
                         changed = true;
                     } catch (error) {
+                        // Abort is terminal even when the caller did not
+                        // require a tool call. Swallowing it here would let
+                        // the partial reply be treated as a successful turn.
+                        if (error?.name === 'AbortError' || signal?.aborted) {
+                            throw error;
+                        }
                         console.warn('[openai] Failed to parse plain-text function calls from streaming response', error);
                         if (requiresToolCall) {
                             throw error;

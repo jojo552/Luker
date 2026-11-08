@@ -2,6 +2,8 @@
 
 Luker has a built-in unified Function Calling runtime that enables AI characters to perform structured operations — searching information, managing memory, manipulating state — rather than just generating text. Regardless of whether the underlying model natively supports tool calls, Luker provides a consistent calling experience.
 
+This page describes the runtime's internal mechanism for extension developers and for diagnosing tool-call problems.
+
 ## Unified Function Calling Framework
 
 The Function Call Runtime provides a unified framework for managing tool registration, invocation, and result handling. The core design goals are:
@@ -110,7 +112,7 @@ This works in coordination with the [Preset Decoupling](/improvements/preset-dec
 
 ## Built-in Tools
 
-The search plugin registers global tools: web search (supporting DuckDuckGo, SearXNG, Brave Search, Tavily, Exa, Serper, SerpApi, and Z.AI) and web access. Other modules (Editing Assistant, Orchestrator, Preset Assistant) use the tool calling mechanism in their own independent contexts, not through the global tool registry.
+The search plugin registers global tools: web search (supporting DuckDuckGo, SearXNG, Brave Search, Tavily, Exa, Serper, SerpApi, Z.AI, and DeepSeek) and web access. Other modules (Editing Assistant, Orchestrator, Preset Assistant) use the tool calling mechanism in their own independent contexts, not through the global tool registry.
 
 ::: info Extension Tools
 Third-party extensions can register custom tools via `context.registerFunctionTool()` (provided by the `ToolManager` in the core). Tool definitions follow a unified schema format and automatically adapt to both native mode and plain-text mode after registration. See the [Extension API — Tool Registration](/development/extension-api/generation#tool-registration) documentation for details.

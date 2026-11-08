@@ -2,6 +2,8 @@
 
 The Request Inspector is one of Luker's core backend modules, used to track the complete lifecycle of each AI generation request from initiation to completion, and record detailed token usage data. It serves as the infrastructure for generation diagnostics.
 
+This page describes what it records and how it is structured, for diagnosing generation problems and tuning retention.
+
 ## Problem Background
 
 In SillyTavern, after an AI generation request is sent, the backend does not systematically record the request's token consumption. Users cannot know how many tokens each generation actually cost, and administrators cannot track resource usage in multi-user scenarios.
@@ -73,6 +75,12 @@ Beyond text generation, the Request Inspector also tracks image generation reque
 ### Embedding & Rerank Request Tracking
 
 The Request Inspector also spans the vector subsystem, recording embedding, query, and rerank calls sent to every remote vector provider (OpenAI, Cohere, Jina, Ollama, VLLM, Voyage, and so on) and the KoboldCpp direct-embed bridge. Local-only inference sources that never leave the process are skipped so the ring buffer stays focused on actual upstream traffic.
+
+### Aborting In-Flight Requests
+
+Running requests in the inspector list show an **Abort** button. Aborting stops the upstream request, and the client treats it as a user stop: streaming ends, the send button unlocks, and automatic continuation, automatic swiping, and request retries are skipped.
+
+Chat, text, image, embedding, and rerank requests can all be aborted.
 
 ## Record Retention
 

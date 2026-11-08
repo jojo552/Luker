@@ -8,6 +8,7 @@ import {
 } from '../skills/embed.js';
 import { importBundledSkills, buildBundledManifest } from '../skills/bundled.js';
 import { importFromUrl } from '../skills/url-import.js';
+import { runGatedWrite } from '../sync/in-progress-gate.js';
 
 /**
  * REST router for Skill management.
@@ -199,7 +200,13 @@ export function createSkillsRouter({ getRepository, getMemoryIndex }) {
         try {
             const repo = getRepository(req);
             const { url, targetScope } = req.body || {};
-            const result = await importFromUrl({ url, targetScope, repository: repo });
+            // The download holds no write-gate slot; only the install writes synced data.
+            const userRoot = req.user?.directories?.root;
+            const owner = { handle: req.user?.profile?.handle ?? null, userRoot };
+            const repository = userRoot
+                ? { install: args => runGatedWrite(owner, () => repo.install(args)) }
+                : repo;
+            const result = await importFromUrl({ url, targetScope, repository });
             await invalidateIndex(req);
             res.json(result);
         } catch (e) { handleError(e, res); }
@@ -286,10 +293,10 @@ export function createSkillsRouter({ getRepository, getMemoryIndex }) {
         try {
             const repo = getRepository(req);
             const scope = parseScope(req.params.scope);
-            const entries = await repo.listFiles({ scope, name: req.params.name });
+            const entries = await repo.listFileStats({ scope, name: req.params.name });
             const files = entries.map(e => ({
-                path: e.path,
-                size: e.buffer ? e.buffer.length : 0,
+                path: e.relPath,
+                size: e.sizeBytes,
                 isBinary: Boolean(e.isBinary),
             }));
             files.sort((a, b) => {

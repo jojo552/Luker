@@ -137,7 +137,7 @@ export const SEARCH_PROVIDERS = [
     {
         id: 'zai',
         label: 'Z.AI (API key)',
-        secretKey: 'api_key_zai',
+        secretKey: 'api_key_zai_search',
         fields: [
             {
                 key: 'recency',
@@ -150,6 +150,12 @@ export const SEARCH_PROVIDERS = [
                 default: 'noLimit',
             },
         ],
+    },
+    {
+        id: 'deepseek',
+        label: 'DeepSeek (API key)',
+        secretKey: 'api_key_deepseek_search',
+        fields: [],
     },
 ];
 

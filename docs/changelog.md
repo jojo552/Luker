@@ -13,6 +13,7 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 
 - Reworked the pre-request search agent into a tool-call loop that ends when it stops calling tools, added a read tool for managed entries, and showed the run in the run panel.
 - Added Tavily, Exa, Serper, SerpApi, and Z.AI as search providers and routed every provider through a unified `/api/search/query` endpoint, restoring the upstream raw-HTML `/api/search/searxng` endpoint.
+- Added DeepSeek as a search provider.
 - Editing a message no longer discards the search results.
 - Fixed the search agent discarding entries written before a failed round.
 
@@ -21,8 +22,13 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 - Added a byte budget to the request inspector and the captured server log buffers, evicting the oldest records once the budget is exceeded; the inspector budget is tunable via `requestInspector.byteBudgetBytes` in `config.yaml`.
 - Fixed a denial-of-service vulnerability that let unauthenticated clients make the server buffer and parse request bodies up to 500 MB before authentication and access control checks ran; request bodies are now parsed after every access check, and the pre-login account routes cap request bodies at 100 KB.
 
+### Performance
+
+- Settings, presets, characters, world books, and other stored data are now split into account-scoped resources with ETag revalidation, so unchanged data reuses the browser cache.
+
 ### Request Inspector
 
+- Added an **Abort** button to running requests in the inspector, stopping the request on the server and on the client.
 - Fixed the Inspector showing the stored provider key instead of the key that actually went on the wire when a plugin overrode the auth header through custom include headers.
 - Added a **Tools** section to the request detail that lists the tools sent to the model, each expanding into a parameter table. Tool definitions no longer appear under **Other Params**.
 - Long tool parameter descriptions in the **Tools** section scroll inside a compact block instead of stretching the parameter table.
@@ -44,18 +50,50 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 - Fixed OpenRouter streamed reasoning details accumulating as one fragment per delta instead of merging into complete entries.
 - Fixed plain-text function calling stripping unparsed function_calls from the reply text.
 - The connection-profile picker now supports multi-select deletion.
+- Fixed the connection-profile picker's delete controls missing Chinese translations.
+- Added model list fetching and a connection test to embedding and rerank profiles.
+- Fixed embedding profiles rejecting Vertex AI service-account authentication as unsupported.
+- Chat-completion, embedding, and rerank connection profiles now normalize the entered URL against each provider's documented base URL.
 
 ### Storage & Sync
 
+- Sync conflicts show a change tree grouped by preset sections, world book entries, character card fields and chat messages, with values loaded on demand and reordered entries marked as moves.
+- Conflict previews mask secret values and compare embedded character-card data.
+- Fixed group conversation renames failing or leaving the renamed chat inaccessible, with complete messages, metadata, state and pins retained and occupied destinations protected.
+- Fixed group chats losing displayed greetings on save, reporting patch conflicts on edits, or overwriting or clearing a conversation after a failed load or delayed chat switch.
+- Added encrypted [S3 Sync](/improvements/s3-sync) and a unified [Sync panel](/improvements/sync) for [LAN pairing](/improvements/lan-sync), backend editing, key repair, removal, scheduling and device labels. A backend-labelled capsule shows indeterminate activity and keeps errors or pending decisions accessible, coordinated with other activity. Failed reads retain loaded configuration and mark uncertain status.
+- Sync retains originating device labels in version choices and chat notices after device relabeling.
+- LAN pairing now verifies the reverse connection before accepting a pairing code and applies the private-address policy to LAN requests.
+- Sync settings changes now wait for active work to finish; incoming LAN sync reports a temporary maintenance error while settings are updating.
+- Added [administrator controls for private sync destinations](/guide/configuration#sync-private-addresses), with current account checks and TLS hostname verification for LAN and S3 connections.
+- Fixed sync reading, writing, or deleting outside its data directories through symbolic links in category roots or migrated workdirs.
+- Fixed sync accepting filesystem name aliases and propagating a missing spelling as a deletion.
+- Fixed presets whose names contain `.luker-state.` being confused with preset state during storage and sync.
+- Fixed unreadable sync settings appearing empty and being replaced by ordinary configuration changes.
+- Reduced redundant pack validation during unchanged S3 sync polls while retaining full integrity checks.
+- Fixed SQL sync omitting accepted dot-leading names, names containing double dots, and preset state whose preset is absent.
+- Fixed metadata generation, folder edits, and cache cleanup replacing an unreadable synchronized image index.
+- Fixed deleted character Data Bank attachments remaining in saved settings and reappearing after reloading.
 - Fixed LAN Sync pairing failing with an authentication error on instances with user accounts enabled.
 - Fixed LAN Sync on SQLite, MySQL, and PostgreSQL storage ignoring file-backed categories such as characters, and deleting them when database-backed categories synced.
 - Fixed deletions of worlds, chats, and other database-backed records not reaching the other device on SQLite, MySQL, and PostgreSQL storage.
+- Fixed LAN Sync between MySQL or PostgreSQL storage and SQLite or file storage reporting conflicts on identical worlds, presets, and other records.
 - Fixed the media deletion preview overflowing the screen.
 - The Clean-Up dialog now renders a category's items only when it is expanded, so large scan results no longer stall the page.
 - Fixed LAN Sync reporting success when the other device failed to write the changes, which could leave both devices out of sync.
 - LAN Sync failures now appear as a toast and are written to the debug log.
 - LAN Sync pairing links now embed a detected LAN address instead of a localhost address, and the generating device can pick another address.
 - LAN Sync now reports the underlying network error when the other device is unreachable.
+- Added [automatic sync](/improvements/sync#automatic-sync-and-schedule) at startup, after writes go idle, at a configured interval and on LAN change notifications, with manual Sync now available. Both ends must be upgraded.
+- Fixed character stats synced from another device being overwritten by this device's periodic save.
+- Fixed background folders repeatedly conflicting in LAN Sync between two devices, which discarded the folder assignments of the version not chosen.
+- Changed character stats edited on two devices to merge automatically.
+- Fixed the first LAN Sync of the settings between two devices reporting a conflict on settings.json when the settings were otherwise identical.
+- Changed group files and character cards edited on two devices to merge the last opened chat and dates automatically instead of reporting a conflict.
+- Added [pending sync decisions](/improvements/sync#pending-decisions) with origin-labelled previews, shared-path grouping, stale overwrite confirmation and propagated choices. Pending items reopen on page load; unreadable records remain unknown rather than resolved, and files sync cannot update stay listed.
+- Added [chat branches and restoration notices](/improvements/sync#chat-branches-and-restored-chats) for character and group chats, retaining their owning group when needed. Dismissing a notice leaves the saved content intact; unsuccessful or unreadable dismissals remain pending.
+- Added sync schedule settings for the wait after the last edit and the interval for checking other devices.
+- Changed Undo last sync to revert the files the last sync changed on every synced device and keep files edited after it.
 - Fixed ZIP restores stalling while extracting large files.
 - Fixed ZIP restores importing the built-in extensions as third-party extensions when the archive contains the source tree, which made every built-in extension fail to load.
 - Fixed onboarding completion overwriting API connection profiles and personas imported from a Data ZIP.
@@ -77,6 +115,9 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 
 ### Client Apps
 
+- Added **Refresh** and **Endpoint** entries to the user settings drawer in the Android, iOS, and HarmonyOS apps.
+- Added a native recovery dialog when a custom endpoint fails to load, with endpoint switch, retry, and cancel actions.
+- The iOS app now applies endpoint changes immediately and starts or stops the local service for the selected endpoint.
 - Third-party links in the desktop, Android, and HarmonyOS apps now open in the system browser instead of replacing the Luker page, with an **Open external links in the system browser** toggle in user settings. Popups that request window features open as an in-app floating window, so third-party authorization flows keep working.
 - Fixed the crash report not appearing after the app exited abnormally.
 
@@ -121,11 +162,14 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 ### World Info
 
 - The world-book picker now supports multi-select deletion.
+- The world-book picker now supports multi-select export as a zip.
 
 ### Presets
 
 - Preset and template pickers now support multi-select deletion.
+- Preset and template pickers now support multi-select export as a zip.
 - Improved performance when a preset is bound to a character card.
+- Fixed Completion Preset Assistant changes to a card-bound preset not reaching the active settings and the rendered controls.
 
 ### Chat
 
@@ -134,13 +178,16 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 
 ### Fixes
 
+- Fixed editing group chat messages failing with a chat patch conflict.
 - Fixed LAN Sync status messages and other translated strings showing in English on Chinese locales.
 - Fixed empty-input Send not continuing the last message when "Press Send to continue" is enabled.
 - Fixed token count estimation erroring out when a tokenizer fails to load.
 - Fixed a spurious "Chat save aborted" alert appearing when Luker opens.
+- Fixed World Info book names containing HTML being rendered as page content.
 - Fixed the update check never reporting an available update on Android and HarmonyOS.
 - Fixed state replay dropping full-replacement patches, which could lose stored extension data when a large change was saved.
 - Fixed the **Auth & Limits** admin tab rendering its fields centered and misaligned.
+- Fixed a click between two checkboxes in the multi-select pickers switching the active item.
 
 ## v2.8.0 (2026-10-01)
 

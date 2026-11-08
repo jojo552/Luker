@@ -18,13 +18,16 @@ import { getLlamaCppVector, getLlamaCppBatchVector } from '../vectors/llamacpp-v
 import { getVllmVector, getVllmBatchVector } from '../vectors/vllm-vectors.js';
 import { getOllamaVector, getOllamaBatchVector } from '../vectors/ollama-vectors.js';
 import { rerank } from '../vectors/rerank.js';
+import { listModels } from '../vectors/model-list.js';
 import { getCommonCredentials, getSourceSettings } from '../vectors/source-settings.js';
 import {
     startEmbeddingInspection,
     completeEmbeddingInspection,
     failEmbeddingInspection,
     extractEmbeddingMeta,
+    getInspectionAbortSignal,
 } from '../request-inspector.js';
+import { runGatedWrite } from '../sync/in-progress-gate.js';
 
 // Vector sources that never hit an upstream HTTP endpoint from the server:
 //   - transformers  → local xenova/transformers pipeline (in-process inference)
@@ -233,7 +236,8 @@ async function getIndex(directories, collectionId, source, sourceSettings) {
     const store = new vectra.LocalIndex(pathToFile);
 
     if (!await store.isIndexCreated()) {
-        await store.createIndex();
+        // Creating an empty index writes synced data; only this step takes a gate slot.
+        await runGatedWrite({ userRoot: directories.root }, () => store.createIndex(), { dirty: false });
     }
 
     return store;
@@ -249,19 +253,18 @@ async function getIndex(directories, collectionId, source, sourceSettings) {
  * @param {import('express').Request} [request] - Inspector-carrying request
  */
 async function insertVectorItems(directories, collectionId, source, sourceSettings, items, request = null) {
-    const store = await getIndex(directories, collectionId, source, sourceSettings);
-
-    await store.beginUpdate();
-
+    // Embeddings are fetched first without a gate slot; the index update then
+    // runs under one slot and never waits on the network.
     const vectors = await getBatchVector(source, sourceSettings, items.map(x => x.text), false, directories, request);
-
-    for (let i = 0; i < items.length; i++) {
-        const item = items[i];
-        const vector = vectors[i];
-        await store.upsertItem({ vector: vector, metadata: { hash: item.hash, text: item.text, index: item.index, ...(item.metadata || {}) } });
-    }
-
-    await store.endUpdate();
+    await runGatedWrite({ userRoot: directories.root, handle: request?.user?.profile?.handle ?? null }, async () => {
+        const store = await getIndex(directories, collectionId, source, sourceSettings);
+        await store.beginUpdate();
+        for (let i = 0; i < items.length; i++) {
+            const item = items[i];
+            await store.upsertItem({ vector: vectors[i], metadata: { hash: item.hash, text: item.text, index: item.index, ...(item.metadata || {}) } });
+        }
+        await store.endUpdate();
+    });
 
     // Return first vector dim so the router can surface `vectorDim` on the
     // inspector entry without a second pass over the vectors array.
@@ -419,6 +422,22 @@ async function regenerateCorruptedIndexErrorHandler(req, res, error) {
     return res.sendStatus(500);
 }
 
+/**
+ * Translate an inspector-driven abort into a 499 response. The client's
+ * `vectorFetch` maps 499 to an AbortError so callers see a user-style abort
+ * instead of a generic upstream failure. Returns true when the response was
+ * already sent.
+ *
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
+ * @returns {boolean}
+ */
+function sendInspectionAbortIfNeeded(req, res) {
+    if (!getInspectionAbortSignal(req)?.aborted) return false;
+    res.status(499).json({ error: 'aborted' });
+    return true;
+}
+
 export const router = express.Router();
 
 router.post('/query', async (req, res) => {
@@ -459,6 +478,7 @@ router.post('/query', async (req, res) => {
         }
         return res.json(results);
     } catch (error) {
+        if (sendInspectionAbortIfNeeded(req, res)) return;
         if (isLocalInferenceUnavailable(error)) {
             return sendLocalInferenceUnavailable(res, error);
         }
@@ -542,6 +562,7 @@ router.post('/query-multi', async (req, res) => {
         }
         return res.json(results);
     } catch (error) {
+        if (sendInspectionAbortIfNeeded(req, res)) return;
         if (isLocalInferenceUnavailable(error)) {
             return sendLocalInferenceUnavailable(res, error);
         }
@@ -587,11 +608,59 @@ router.post('/rerank', async (req, res) => {
         });
         return res.json(results);
     } catch (error) {
+        if (sendInspectionAbortIfNeeded(req, res)) return;
         if (isLocalInferenceUnavailable(error)) {
             return sendLocalInferenceUnavailable(res, error);
         }
         console.error('Rerank failed:', error);
         failEmbeddingInspection(req, error?.message || String(error), 500);
+        return res.status(500).json({ error: error.message });
+    }
+});
+
+router.post('/models', async (req, res) => {
+    try {
+        const source = String(req.body.source || '').trim();
+        if (!source) {
+            return res.sendStatus(400);
+        }
+
+        const mode = req.body.mode === 'rerank' ? 'rerank' : 'embed';
+        const models = await listModels({ source, mode, request: req });
+        return res.json(models);
+    } catch (error) {
+        console.error('Vector model list failed:', error);
+        return res.status(500).json({ error: error.message });
+    }
+});
+
+router.post('/test', async (req, res) => {
+    try {
+        const source = String(req.body.source || '').trim();
+        if (!source) {
+            return res.sendStatus(400);
+        }
+
+        if (source === 'webllm' || source === 'koboldcpp') {
+            return res.status(400).json({ error: 'This source computes embeddings in the browser. Test it from the profile editor.' });
+        }
+
+        const sourceSettings = getSourceSettings(source, req);
+        const vector = await getVector(source, sourceSettings, 'test', false, req.user.directories, req);
+
+        if (!Array.isArray(vector) || vector.length === 0) {
+            throw new Error('The embedding endpoint returned no vector.');
+        }
+
+        return res.json({
+            dimensions: vector.length,
+            model: String(sourceSettings.model || ''),
+        });
+    } catch (error) {
+        if (isLocalInferenceUnavailable(error)) {
+            return sendLocalInferenceUnavailable(res, error);
+        }
+        console.error('Vector connection test failed:', error);
         return res.status(500).json({ error: error.message });
     }
 });
@@ -624,6 +693,7 @@ router.post('/insert', async (req, res) => {
         }
         return res.sendStatus(200);
     } catch (error) {
+        if (sendInspectionAbortIfNeeded(req, res)) return;
         if (isLocalInferenceUnavailable(error)) {
             return sendLocalInferenceUnavailable(res, error);
         }

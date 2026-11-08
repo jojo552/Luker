@@ -1,7 +1,6 @@
 // Endpoint parity coverage for the chat-related read paths affected by the
 // db-mode migration. The audit identified these as broken under db mode:
 //   - POST /api/characters/chats           (list chats per character)
-//   - POST /api/chats/get-delta            (paginated chat read)
 //   - POST /api/chats/rename               (existsSync gate)
 //   - POST /api/chats/delete               (existsSync gate)
 //   - POST /api/chats/export               (file read)
@@ -48,13 +47,24 @@ describe.each(ENDPOINT_HARNESSES)('chat read endpoints on $name', ({ mode }) => 
         if (harness) await harness.cleanup();
     });
 
+    test('removed chat delta endpoints are no longer routed', async () => {
+        await request(harness.server)
+            .post('/api/chats/get-delta')
+            .send({ avatar_url: 'Alice.png', file_name: 'main' })
+            .expect(404);
+        await request(harness.server)
+            .post('/api/chats/group/get-delta')
+            .send({ id: 'group-1' })
+            .expect(404);
+    });
+
     // --- /api/characters/chats ---
 
     test('REGRESSION: /api/characters/chats lists chats stored via ChatRepo (no fs scan)', async () => {
         await getChatRepo().save(harness.handle, 'Alice', 'chat-a', SAMPLE_HEADER, SAMPLE_MESSAGES, null);
         await getChatRepo().save(harness.handle, 'Alice', 'chat-b', SAMPLE_HEADER, SAMPLE_MESSAGES, null);
 
-        const res = await request(harness.app)
+        const res = await request(harness.server)
             .post('/api/characters/chats')
             .send({ avatar_url: 'Alice.png', simple: true })
             .expect(200);
@@ -66,7 +76,7 @@ describe.each(ENDPOINT_HARNESSES)('chat read endpoints on $name', ({ mode }) => 
     test('REGRESSION: /api/characters/chats (metadata=true) returns chatItems + last message from ChatRepo', async () => {
         await getChatRepo().save(harness.handle, 'Alice', 'main', SAMPLE_HEADER, SAMPLE_MESSAGES, null);
 
-        const res = await request(harness.app)
+        const res = await request(harness.server)
             .post('/api/characters/chats')
             .send({ avatar_url: 'Alice.png', metadata: true })
             .expect(200);
@@ -78,42 +88,14 @@ describe.each(ENDPOINT_HARNESSES)('chat read endpoints on $name', ({ mode }) => 
         expect(entry.chat_metadata?.lorebook).toBe('TestLore');
     });
 
-    // --- /api/chats/get-delta ---
-
-    test('REGRESSION: /api/chats/get-delta returns the full chat body for a Repo-saved chat', async () => {
-        await getChatRepo().save(harness.handle, 'Alice', 'main', SAMPLE_HEADER, SAMPLE_MESSAGES, null);
-
-        const res = await request(harness.app)
-            .post('/api/chats/get-delta')
-            .send({ avatar_url: 'Alice.png', file_name: 'main', from_index: 0 })
-            .expect(200);
-        expect(Array.isArray(res.body.chat)).toBe(true);
-        expect(res.body.chat).toHaveLength(SAMPLE_MESSAGES.length);
-        expect(res.body.chat[0].mes).toBe(SAMPLE_MESSAGES[0].mes);
-    });
-
-    test('REGRESSION: /api/chats/get-delta from_index=N returns tail correctly', async () => {
-        const many = [
-            ...SAMPLE_MESSAGES,
-            { name: 'User', mes: 'msg #3' },
-            { name: 'Alice', mes: 'msg #4' },
-        ];
-        await getChatRepo().save(harness.handle, 'Alice', 'main', SAMPLE_HEADER, many, null);
-
-        const res = await request(harness.app)
-            .post('/api/chats/get-delta')
-            .send({ avatar_url: 'Alice.png', file_name: 'main', from_index: 2 })
-            .expect(200);
-        expect(res.body.chat).toHaveLength(2);
-        expect(res.body.chat[0].mes).toBe('msg #3');
-    });
-
     // --- /api/chats/rename ---
 
     test('REGRESSION: /api/chats/rename works for Repo-resident chats (no fs existsSync gate)', async () => {
         await getChatRepo().save(harness.handle, 'Alice', 'old', SAMPLE_HEADER, SAMPLE_MESSAGES, null);
+        await getChatRepo().setState(harness.handle, 'Alice', 'old', 'retained', { nested: ['kept', null] });
+        const original = await getChatRepo().get(harness.handle, 'Alice', 'old');
 
-        await request(harness.app)
+        await request(harness.server)
             .post('/api/chats/rename')
             .send({ avatar_url: 'Alice.png', original_file: 'old.jsonl', renamed_file: 'new.jsonl', is_group: false })
             .expect(200);
@@ -122,13 +104,16 @@ describe.each(ENDPOINT_HARNESSES)('chat read endpoints on $name', ({ mode }) => 
         const newChat = await getChatRepo().get(harness.handle, 'Alice', 'new');
         expect(oldChat).toBeNull();
         expect(newChat).not.toBeNull();
-        expect(newChat.body[0].mes).toBe(SAMPLE_MESSAGES[0].mes);
+        expect(newChat.header).toEqual(original.header);
+        expect(newChat.body).toEqual(original.body);
+        expect(newChat.integrity).toBe(original.integrity);
+        expect(await getChatRepo().getState(harness.handle, 'Alice', 'new', 'retained')).toEqual({ nested: ['kept', null] });
     });
 
     test('REGRESSION: /api/chats/rename strips repeated .jsonl from both sides', async () => {
         await getChatRepo().save(harness.handle, 'Alice', 'old-sfx', SAMPLE_HEADER, SAMPLE_MESSAGES, null);
 
-        const res = await request(harness.app)
+        const res = await request(harness.server)
             .post('/api/chats/rename')
             .send({ avatar_url: 'Alice.png', original_file: 'old-sfx.jsonl.jsonl', renamed_file: 'new-sfx.jsonl.jsonl', is_group: false })
             .expect(200);
@@ -143,7 +128,7 @@ describe.each(ENDPOINT_HARNESSES)('chat read endpoints on $name', ({ mode }) => 
     test('REGRESSION: /api/chats/rename preserves dots in bare names (v1.2 stays v1.2)', async () => {
         await getChatRepo().save(harness.handle, 'Alice', 'dotted-src', SAMPLE_HEADER, SAMPLE_MESSAGES, null);
 
-        const res = await request(harness.app)
+        const res = await request(harness.server)
             .post('/api/chats/rename')
             .send({ avatar_url: 'Alice.png', original_file: 'dotted-src.jsonl', renamed_file: 'v1.2', is_group: false })
             .expect(200);
@@ -158,7 +143,7 @@ describe.each(ENDPOINT_HARNESSES)('chat read endpoints on $name', ({ mode }) => 
     test('REGRESSION: /api/chats/delete works for Repo-resident chats', async () => {
         await getChatRepo().save(harness.handle, 'Alice', 'doomed', SAMPLE_HEADER, SAMPLE_MESSAGES, null);
 
-        await request(harness.app)
+        await request(harness.server)
             .post('/api/chats/delete')
             .send({ avatar_url: 'Alice.png', chatfile: 'doomed.jsonl', is_group: false })
             .expect(200);
@@ -171,7 +156,7 @@ describe.each(ENDPOINT_HARNESSES)('chat read endpoints on $name', ({ mode }) => 
         await getChatRepo().save(harness.handle, 'Alice', 'v1', SAMPLE_HEADER, SAMPLE_MESSAGES, null);
         await getChatRepo().save(harness.handle, 'Alice', 'v1.2', SAMPLE_HEADER, SAMPLE_MESSAGES, null);
 
-        await request(harness.app)
+        await request(harness.server)
             .post('/api/chats/delete')
             .send({ avatar_url: 'Alice.png', chatfile: 'v1.2', is_group: false })
             .expect(200);
@@ -183,7 +168,7 @@ describe.each(ENDPOINT_HARNESSES)('chat read endpoints on $name', ({ mode }) => 
     test('REGRESSION: /api/chats/delete strips repeated .jsonl', async () => {
         await getChatRepo().save(harness.handle, 'Alice', 'doomed-sfx', SAMPLE_HEADER, SAMPLE_MESSAGES, null);
 
-        await request(harness.app)
+        await request(harness.server)
             .post('/api/chats/delete')
             .send({ avatar_url: 'Alice.png', chatfile: 'doomed-sfx.jsonl.jsonl', is_group: false })
             .expect(200);
@@ -197,7 +182,7 @@ describe.each(ENDPOINT_HARNESSES)('chat read endpoints on $name', ({ mode }) => 
         await getChatRepo().save(harness.handle, 'Alice', 'seg-a', SAMPLE_HEADER, SAMPLE_MESSAGES, null);
         await getChatRepo().save(harness.handle, 'Alice', 'seg-b', SAMPLE_HEADER, SAMPLE_MESSAGES, null);
 
-        const res = await request(harness.app)
+        const res = await request(harness.server)
             .post('/api/chats/merge')
             .send({
                 avatar_url: 'Alice.png',
@@ -217,7 +202,7 @@ describe.each(ENDPOINT_HARNESSES)('chat read endpoints on $name', ({ mode }) => 
     test('REGRESSION: /api/chats/export returns Repo-resident chat content (jsonl format)', async () => {
         await getChatRepo().save(harness.handle, 'Alice', 'expo', SAMPLE_HEADER, SAMPLE_MESSAGES, null);
 
-        const res = await request(harness.app)
+        const res = await request(harness.server)
             .post('/api/chats/export')
             .send({ avatar_url: 'Alice.png', file: 'expo.jsonl', format: 'jsonl', is_group: false, exportfilename: 'expo.jsonl' })
             .expect(200);
@@ -242,7 +227,7 @@ describe.each(ENDPOINT_HARNESSES)('chat read endpoints on $name', ({ mode }) => 
             { name: 'User', mes: 'tigers anything' },
         ], null);
 
-        const res = await request(harness.app)
+        const res = await request(harness.server)
             .post('/api/chats/search')
             .send({ query: 'elephants', avatar_url: 'Alice.png' })
             .expect(200);
@@ -267,7 +252,7 @@ describe.each(ENDPOINT_HARNESSES)('chat read endpoints on $name', ({ mode }) => 
             chat_id: 'gchat-reef',
         });
 
-        const res = await request(harness.app)
+        const res = await request(harness.server)
             .post('/api/chats/search')
             .send({ query: '', avatar_url: null, group_id: 'grp-reef' })
             .expect(200);
@@ -283,7 +268,7 @@ describe.each(ENDPOINT_HARNESSES)('chat read endpoints on $name', ({ mode }) => 
         await getChatRepo().save(harness.handle, 'Alice', 'older', SAMPLE_HEADER, SAMPLE_MESSAGES, null);
         await getChatRepo().save(harness.handle, 'Alice', 'newer', SAMPLE_HEADER, SAMPLE_MESSAGES, null);
 
-        const res = await request(harness.app)
+        const res = await request(harness.server)
             .post('/api/chats/recent')
             .send({})
             .expect(200);
@@ -298,7 +283,7 @@ describe.each(ENDPOINT_HARNESSES)('chat read endpoints on $name', ({ mode }) => 
         await getChatRepo().save(harness.handle, 'Alice', 'main', SAMPLE_HEADER, SAMPLE_MESSAGES, null);
         const before = await getChatRepo().get(harness.handle, 'Alice', 'main');
 
-        await request(harness.app)
+        await request(harness.server)
             .post('/api/chats/meta')
             .send({
                 avatar_url: 'Alice.png',
@@ -325,7 +310,7 @@ describe.each(ENDPOINT_HARNESSES)('chat read endpoints on $name', ({ mode }) => 
         // a /chat_metadata sub-path). The Repo's updateChatMetadata semantics
         // shallow-merge, and the endpoint pipes the JSON patch through
         // applyJsonPatch on the existing chat_metadata.
-        await request(harness.app)
+        await request(harness.server)
             .post('/api/chats/meta/patch')
             .send({
                 avatar_url: 'Alice.png',
@@ -350,7 +335,7 @@ describe.each(ENDPOINT_HARNESSES)('chat read endpoints on $name', ({ mode }) => 
 
         await harness.reopenEngine();
 
-        const res = await request(harness.app)
+        const res = await request(harness.server)
             .post('/api/characters/chats')
             .send({ avatar_url: 'Alice.png', simple: true })
             .expect(200);

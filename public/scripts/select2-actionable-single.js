@@ -431,6 +431,8 @@ function showPresetContextMenu(anchor, presetName, callbacks, selectElement, own
  * @param {object} [options.presetGroupCallbacks]
  * @param {((options: Array<{ ownerKey: string, value: string, text: string, element: HTMLOptionElement|null, selectElement: HTMLSelectElement }>) => Promise<void>|void)|null} [options.onBulkDelete]
  * @param {string} [options.bulkDeleteButtonTitle='Delete']
+ * @param {((options: Array<{ ownerKey: string, value: string, text: string, element: HTMLOptionElement|null, selectElement: HTMLSelectElement }>) => Promise<void>|void)|null} [options.onBulkExport]
+ * @param {string} [options.bulkExportButtonTitle='Export']
  * @param {string} [options.selectAllTitle='Select all']
  * @param {string} [options.selectedLabel='Selected']
  */
@@ -448,6 +450,8 @@ export function initActionableSingleSelect(select, {
     presetGroupCallbacks = null,
     onBulkDelete = null,
     bulkDeleteButtonTitle = 'Delete',
+    onBulkExport = null,
+    bulkExportButtonTitle = 'Export',
     selectAllTitle = 'Select all',
     selectedLabel = 'Selected',
 } = {}) {
@@ -480,6 +484,8 @@ export function initActionableSingleSelect(select, {
     // confirm, the delete, the undo, and its own refresh.
     const selection = createSelectionState();
     const bulkDeleteEnabled = typeof onBulkDelete === 'function';
+    const bulkExportEnabled = typeof onBulkExport === 'function';
+    const bulkActionsEnabled = bulkDeleteEnabled || bulkExportEnabled;
 
     const getDropdown = () => $select.data('select2')?.$dropdown;
 
@@ -516,6 +522,34 @@ export function initActionableSingleSelect(select, {
         return values;
     };
 
+    // Row clicks in batch mode toggle the row's checkbox, so a near miss
+    // between two checkboxes must not reach select2's selection handler.
+    // Returns the row's own checkbox when the row is toggleable.
+    const getRowToggleCheckbox = (target) => {
+        if (!(target instanceof Element)) {
+            return null;
+        }
+
+        const $row = $(target).closest('.select2-results__option');
+        if (!$row.length) {
+            return null;
+        }
+
+        const checkbox = $row.find('.luker-action-select2-option__checkbox').get(0);
+        return checkbox instanceof HTMLElement && checkbox.dataset.lukerActionOwner === ownerKey ? checkbox : null;
+    };
+
+    const getSelectedItems = () => selection.values().map((value) => {
+        const optionElement = Array.from(selectElement.options).find((option) => String(option.value) === value) || null;
+        return {
+            ownerKey,
+            value,
+            text: String(optionElement?.textContent || '').trim(),
+            element: optionElement,
+            selectElement,
+        };
+    }).filter((optionData) => canDelete(optionData));
+
     const applyBatchMode = (active) => {
         const $surface = getDropdownSurface();
         if ($surface?.length) {
@@ -542,7 +576,7 @@ export function initActionableSingleSelect(select, {
 
         $results.find('.luker-bulk-delete-toolbar').remove();
 
-        if (!bulkDeleteEnabled || selection.size() === 0) {
+        if (!bulkActionsEnabled || selection.size() === 0) {
             applyBatchMode(false);
             return;
         }
@@ -577,13 +611,24 @@ export function initActionableSingleSelect(select, {
             });
         const $count = $('<span class="luker-bulk-delete-toolbar__count"></span>')
             .text(`${selectedLabel}: ${selection.size()}`);
+        const $export = bulkExportEnabled
+            ? $('<button type="button" class="luker-bulk-delete-toolbar__export"></button>')
+                .attr('data-luker-action-owner', ownerKey)
+                .attr('title', bulkExportButtonTitle)
+                .attr('aria-label', bulkExportButtonTitle)
+                .text(bulkExportButtonTitle)
+            : null;
         const $delete = $('<button type="button" class="luker-bulk-delete-toolbar__delete"></button>')
             .attr('data-luker-action-owner', ownerKey)
             .attr('title', bulkDeleteButtonTitle)
             .attr('aria-label', bulkDeleteButtonTitle)
             .text(bulkDeleteButtonTitle);
 
-        $toolbar.append($selectAll, $count, $delete);
+        $toolbar.append($selectAll, $count);
+        if ($export) {
+            $toolbar.append($export);
+        }
+        $toolbar.append($delete);
         $results.prepend($toolbar);
         applyBatchMode(true);
     };
@@ -653,7 +698,7 @@ export function initActionableSingleSelect(select, {
                     .attr('data-preset-group-id', groupId)
                     .css('padding-left', depth > 0 ? ((depth + 1) * 20) + 'px' : '');
                 const label = $('<span class="luker-action-select2-option__label"></span>').text(optionData.text);
-                if (bulkDeleteEnabled && canDelete(optionData)) {
+                if (bulkActionsEnabled && canDelete(optionData)) {
                     row.append(buildRowCheckbox(optionData));
                 }
                 row.append(label);
@@ -688,7 +733,7 @@ export function initActionableSingleSelect(select, {
 
             const row = $('<div class="luker-action-select2-option"></div>');
             const label = $('<span class="luker-action-select2-option__label"></span>').text(optionData.text);
-            if (bulkDeleteEnabled && canDelete(optionData)) {
+            if (bulkActionsEnabled && canDelete(optionData)) {
                 row.append(buildRowCheckbox(optionData));
             }
             row.append(label);
@@ -903,7 +948,9 @@ export function initActionableSingleSelect(select, {
     // checkbox on the currently selected row would dismiss the dropdown and
     // silently drop the batch selection. The listener must capture, because
     // select2's listener sits on an ancestor and a delegated document handler
-    // runs after it.
+    // runs after it. The same guard covers row clicks in batch mode, where the
+    // row is the checkbox's hit area: otherwise any click outside the checkbox
+    // would select the option, close the dropdown and drop the batch selection.
     multiselectGuardControllers.get(selectElement)?.abort();
     const guardController = new AbortController();
     multiselectGuardControllers.set(selectElement, guardController);
@@ -916,6 +963,11 @@ export function initActionableSingleSelect(select, {
 
         const checkbox = target.closest('.luker-action-select2-option__checkbox');
         if (checkbox instanceof HTMLElement && checkbox.dataset.lukerActionOwner === ownerKey) {
+            event.stopPropagation();
+            return;
+        }
+
+        if (selection.size() > 0 && getRowToggleCheckbox(target)) {
             event.stopPropagation();
         }
     }, { capture: true, signal: guardController.signal });
@@ -943,6 +995,46 @@ export function initActionableSingleSelect(select, {
             renderBulkToolbar();
         });
 
+    // === Multi-select row handler ===
+    // While the batch selection is active, the whole row acts as the
+    // checkbox's hit area so a click that lands between two checkboxes ticks
+    // the row instead of switching presets and closing the dropdown.
+    $(document)
+        .off('click' + namespace + '.rowToggle')
+        .on('click' + namespace + '.rowToggle', '.select2-results__option', function (event) {
+            if (selection.size() === 0) {
+                return;
+            }
+
+            const rowCheckbox = getRowToggleCheckbox(this);
+            if (!rowCheckbox) {
+                return;
+            }
+
+            // The checkbox owns its own click handler above.
+            const target = event.target;
+            if (target instanceof Element && target.closest('.luker-action-select2-option__checkbox')) {
+                return;
+            }
+
+            event.preventDefault();
+            event.stopPropagation();
+
+            const value = String(rowCheckbox.dataset.optionValue ?? '');
+            if (!value) {
+                return;
+            }
+
+            if (selection.has(value)) {
+                selection.remove([value]);
+            } else {
+                selection.add([value]);
+            }
+
+            rowCheckbox.checked = selection.has(value);
+            renderBulkToolbar();
+        });
+
     // === Bulk delete toolbar handler ===
     // `click` rather than `pointerup`: a `<button>` fires `click` for mouse,
     // touch, Enter and Space alike, so the toolbar stays operable from the
@@ -957,16 +1049,7 @@ export function initActionableSingleSelect(select, {
             event.preventDefault();
             event.stopPropagation();
 
-            const items = selection.values().map((value) => {
-                const optionElement = Array.from(selectElement.options).find((option) => String(option.value) === value) || null;
-                return {
-                    ownerKey,
-                    value,
-                    text: String(optionElement?.textContent || '').trim(),
-                    element: optionElement,
-                    selectElement,
-                };
-            }).filter((optionData) => canDelete(optionData));
+            const items = getSelectedItems();
 
             if (!items.length) {
                 return;
@@ -980,6 +1063,34 @@ export function initActionableSingleSelect(select, {
                 await onBulkDelete(items);
             } catch (error) {
                 console.error('Actionable single select bulk delete handler failed', error);
+            }
+        });
+
+    // === Bulk export toolbar handler ===
+    $(document)
+        .off('click' + namespace + '.bulkExport')
+        .on('click' + namespace + '.bulkExport', '.luker-bulk-delete-toolbar__export', async function (event) {
+            if ($(this).attr('data-luker-action-owner') !== ownerKey || typeof onBulkExport !== 'function') {
+                return;
+            }
+
+            event.preventDefault();
+            event.stopPropagation();
+
+            const items = getSelectedItems();
+
+            if (!items.length) {
+                return;
+            }
+
+            if ($select.data('select2')) {
+                $select.select2('close');
+            }
+
+            try {
+                await onBulkExport(items);
+            } catch (error) {
+                console.error('Actionable single select bulk export handler failed', error);
             }
         });
 

@@ -1181,7 +1181,14 @@ async function generateStreamCallback(args, value) {
  */
 async function migrateProxyToBaseUrl() {
     const settings = extension_settings.connectionManager;
+    if (settings._proxyToBaseUrlMigrated) {
+        return;
+    }
+    // The marker is synced with the settings, so it holds no per-device time.
     if (settings._proxyToBaseUrlMigratedAt) {
+        delete settings._proxyToBaseUrlMigratedAt;
+        settings._proxyToBaseUrlMigrated = true;
+        saveSettingsDebounced();
         return;
     }
 
@@ -1284,7 +1291,7 @@ async function migrateProxyToBaseUrl() {
         console.warn('[base-url migration] global oai_settings migration failed', err);
     }
 
-    settings._proxyToBaseUrlMigratedAt = Date.now();
+    settings._proxyToBaseUrlMigrated = true;
     saveSettingsDebounced();
 }
 
@@ -1342,7 +1349,7 @@ export async function init() {
     renderConnectionProfiles(profiles);
     initActionableSingleSelect(profiles, {
         searchInputPlaceholder: t`Search...`,
-        deleteButtonTitle: t`Delete connection profile`,
+        deleteButtonTitle: t`Delete a connection profile`,
         canDelete: ({ value }) => Boolean(value),
         onDelete: async ({ value }) => {
             const deletedSelected = extension_settings.connectionManager.selectedProfile === value;
@@ -1382,7 +1389,7 @@ export async function init() {
             };
             await deleteConnectionProfilesWithUndo(ids, refreshProfileUi);
         },
-        bulkDeleteButtonTitle: t`Delete connection profile`,
+        bulkDeleteButtonTitle: t`Delete a connection profile`,
         selectAllTitle: t`Select all`,
         selectedLabel: t`Selected`,
     });

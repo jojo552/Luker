@@ -67,6 +67,7 @@ import {
     regenerateGroup,
     group_generation_id,
     getGroupChat,
+    loadGroupChat,
     renameGroupMember,
     createNewGroupChat,
     editGroup,
@@ -131,6 +132,7 @@ import {
 import { openManageBoundPresetsDialog } from './scripts/character/manage-bound-presets-dialog.js';
 import { handlePostReplaceBindings } from './scripts/character/card-binding-preservation.js';
 import { handlePostReplaceWorldBook } from './scripts/character/post-replace-actions.js';
+import { invalidateCharacterResource, loadCharacterResource } from './scripts/character/resource-read.js';
 
 import {
     generateNovelWithStreaming,
@@ -211,6 +213,7 @@ import { downloadFromServer } from './scripts/luker-download.js';
 
 import { bootstrapExtensions, cancelDebouncedMetadataSave, doDailyExtensionUpdatesCheck, extension_settings, initExtensions, primeExtensionSettings, runGenerationInterceptors, saveMetadataDebounced } from './scripts/extensions.js';
 import { STATE_ERROR_REASONS, makeStateError, makeStateOk } from './scripts/state-errors.js';
+import { invalidateStateResources, normalizeStateNamespace, readStateEnvelope } from './scripts/state-resource.js';
 import {
     formatHttpErrorHint,
     formatTransportErrorHint,
@@ -295,6 +298,7 @@ import { initDebugExportButton } from './scripts/debug-export.js';
 import { initDebugMenuCapture } from './scripts/debug-menu-capture.js';
 import { initAndroidDebugTrail } from './scripts/luker-android-debug-trail.js';
 import { currentUser, getConfigValidationMessage, isAdmin, setUserControls } from './scripts/user.js';
+import './scripts/sync-status.js';
 import { POPUP_RESULT, POPUP_TYPE, Popup, callGenericPopup, fixToastrForDialogs } from './scripts/popup.js';
 import { renderTemplate, renderTemplateAsync } from './scripts/templates.js';
 import { initScrapers } from './scripts/scrapers.js';
@@ -352,6 +356,8 @@ import { setRequestCompressionConfig } from './scripts/request-compression.js';
 import { canJumpToSwipeForMessage, canOpenSwipePickerForMessage, initSwipePicker } from './scripts/swipe-picker.js';
 import { bootSelfProfilerFromStorage } from './scripts/self-profiler.js';
 import { createLukerDelivery, installFetchProxy, installFetchProxyForAllIframes, installLifecycleHooks } from './scripts/ws-delivery.js';
+import { loadSettingsEnvelope } from './scripts/settings-resource-read.js';
+import { listPresetDocuments, loadPresetResources, readPresetDocument } from './scripts/named-resource-read.js';
 
 installFrontendLogCapture();
 initAndroidDebugTrail();
@@ -485,11 +491,6 @@ export let name1 = default_user_name;
 export let name2 = systemUserName;
 /** @type {ChatMessage[]} */
 export let chat = [];
-const chatServerState = {
-    nextOlderIndex: 0,
-    totalMessages: 0,
-    hasMore: false,
-};
 let lukerRecoveryPollTimer = null;
 let lukerRecoveryPollBusy = false;
 let lukerRecoveryJobId = '';
@@ -634,12 +635,6 @@ function buildLukerGenerationRequestOptions(type, api = main_api) {
         job_id: generationId,
         persist_target: persistTarget,
     };
-}
-
-export function setChatServerState({ nextOlderIndex = 0, totalMessages = 0, hasMore = false } = {}) {
-    chatServerState.nextOlderIndex = Math.max(0, Number(nextOlderIndex) || 0);
-    chatServerState.totalMessages = Math.max(0, Number(totalMessages) || 0);
-    chatServerState.hasMore = Boolean(hasMore);
 }
 
 function getLukerPersistTargetForCurrentChat() {
@@ -804,15 +799,17 @@ function renderLukerRecoveryPreview(text, status = 'running') {
         }
     }
 
-    const statusText = status === 'failed'
-        ? t`Generation failed on server`
-        : status === 'completed'
-            ? t`Generation completed on server`
-            : status === 'awaiting_ack'
-                ? t`Waiting for client save confirmation`
-                : status === 'persisting'
-                    ? t`Persisting generation on server`
-                    : t`Resuming server stream`;
+    const statusText = status === 'cancelled'
+        ? t`Generation cancelled on server`
+        : status === 'failed'
+            ? t`Generation failed on server`
+            : status === 'completed'
+                ? t`Generation completed on server`
+                : status === 'awaiting_ack'
+                    ? t`Waiting for client save confirmation`
+                    : status === 'persisting'
+                        ? t`Persisting generation on server`
+                        : t`Resuming server stream`;
     preview.find('.luker_preview_status').text(statusText);
     preview.find('.luker_preview_text').text(String(text || ''));
 }
@@ -886,7 +883,10 @@ function startLukerRecoverySseStream(chatIdSnapshot) {
             liveText = payload.text;
         }
         renderLukerRecoveryPreview(liveText, payload?.status || 'running');
-        if (payload?.status === 'failed') {
+        if (payload?.status === 'cancelled') {
+            stopLukerGenerationRecovery();
+            void reloadCurrentChat();
+        } else if (payload?.status === 'failed') {
             stopLukerGenerationRecovery();
         } else if (payload?.status === 'completed') {
             void finalizeLukerRecoveredGeneration(liveText);
@@ -953,6 +953,12 @@ function startLukerRecoveryPollFallback(chatIdSnapshot) {
 
             const statusData = await statusResponse.json();
             renderLukerRecoveryPreview(statusData?.text || '', statusData?.status || 'running');
+
+            if (statusData?.status === 'cancelled') {
+                stopLukerGenerationRecovery();
+                void reloadCurrentChat();
+                return;
+            }
 
             if (statusData?.status === 'failed') {
                 stopLukerGenerationRecovery();
@@ -2148,6 +2154,19 @@ async function firstLoadInit() {
         throw new Error('Initialization failed');
     }
 
+    // Server-initiated abort from the request inspector. Only the tab that
+    // owns the main generation should run the user-stop path; quiet requests
+    // (memory extraction, agenda planning, …) just propagate the AbortError
+    // to their caller. Comparing against the tracked generation id keeps a
+    // quiet-request abort from cancelling the main chat reply.
+    function handleServerAbort(requestId) {
+        const mainGenerationId = getLastLukerGenerationIdForApi();
+        if (!mainGenerationId || String(requestId) !== String(mainGenerationId)) {
+            return;
+        }
+        stopGeneration();
+    }
+
     // Boot the WebSocket delivery channel and install the fetch proxy that
     // tunnels long-running /generate requests through it. The proxy replaces
     // window.fetch so all subsequent generate calls stream chunks over WS.
@@ -2161,6 +2180,7 @@ async function firstLoadInit() {
         const delivery = createLukerDelivery();
         installFetchProxy(delivery, {
             getExtraHeaders: () => getRequestHeaders({ omitContentType: true }),
+            onServerAbort: handleServerAbort,
         });
         // Also patch every same-origin iframe's own fetch, current and future.
         // TavernHelper (JS-Slash-Runner) sandboxes user scripts inside a
@@ -2173,6 +2193,7 @@ async function firstLoadInit() {
         // `load` re-patch) and per-window idempotency guard.
         installFetchProxyForAllIframes(delivery, {
             getExtraHeaders: () => getRequestHeaders({ omitContentType: true }),
+            onServerAbort: handleServerAbort,
         });
         window.__lukerDelivery = delivery;
         await delivery.connect(async () => {
@@ -2209,6 +2230,7 @@ async function firstLoadInit() {
     showLoader();
     const clientVersionPromise = getClientVersion();
     const bootstrapPromise = fetchBootstrapSnapshot();
+    const settingsPayloadPromise = loadSettingsEnvelope({ bootstrap: true });
     registerPromptManagerMigration();
     initDomHandlers();
     initStandaloneMode();
@@ -2238,7 +2260,18 @@ async function firstLoadInit() {
     initNovelAISettings();
     initSystemPrompts();
     console.debug('[init] calling getSettings...');
-    await getSettings({ bootstrap: true, payload: bootstrapSnapshot?.settings });
+    let settingsPayload;
+    try {
+        settingsPayload = await settingsPayloadPromise;
+    } catch (error) {
+        console.error('Failed to load settings resources', error);
+        if (isLoaderVisible()) {
+            await hideLoader();
+        }
+        toastr.error(t`Failed to load settings resources.`, t`Error`, { timeOut: 0, extendedTimeOut: 0, preventDuplicates: true });
+        throw error;
+    }
+    await getSettings({ bootstrap: true, payload: settingsPayload });
     console.debug('[init] getSettings done');
     performance.mark('[init] getSettings done');
     await checkOpenRouterAuth();
@@ -2342,9 +2375,9 @@ async function firstLoadInit() {
             // so this is purely local cleanup so subsequent
             // getPresetStateBatch calls don't return stale rows for a name
             // that has just been deleted (or reused for a new preset).
-            eventSource.on(event_types.PRESET_DELETED, ({ apiId, name } = {}) => {
+            eventSource.on(event_types.PRESET_DELETED, async ({ apiId, name } = {}) => {
                 if (!apiId || !name) return;
-                invalidateAllPresetStateRequestCache({ apiId, name });
+                await invalidateAllPresetStateRequestCache({ apiId, name });
             });
         },
     ]);
@@ -2811,19 +2844,7 @@ export function getEntitiesList({ doFilter = false, doSort = true } = {}) {
 export async function getOneCharacter(avatarUrl, { preserveChat = false } = {}) {
     let getData;
     try {
-        const response = await fetch('/api/characters/get', {
-            method: 'POST',
-            headers: getRequestHeaders(),
-            body: JSON.stringify({
-                avatar_url: avatarUrl,
-            }),
-        });
-
-        if (!response.ok) {
-            return;
-        }
-
-        getData = await response.json();
+        getData = await loadCharacterResource(avatarUrl);
     } catch (error) {
         // A dropped connection or unreadable body must not abort the caller:
         // every caller treats this as a best-effort in-place refresh, and a
@@ -3470,77 +3491,6 @@ export async function showMoreMessages(messagesToLoad = null) {
         messageId = getLastMessageId() + 1;
     }
 
-    if (messageId <= 0 && chatServerState.hasMore) {
-        const prevHeight = chatElement.prop('scrollHeight');
-        const isButtonInView = isElementInViewport($('#show_more_messages')[0]);
-        const startIndex = Math.max(0, chatServerState.nextOlderIndex - count);
-        const limit = Math.max(1, chatServerState.nextOlderIndex - startIndex);
-        const endpoint = selected_group ? '/api/chats/group/get-delta' : '/api/chats/get-delta';
-        const body = selected_group
-            ? { id: groups.find(x => x.id == selected_group)?.chat_id, from_index: startIndex, limit }
-            : {
-                ch_name: getCharacterName(characters[this_chid]),
-                file_name: characters[this_chid]?.chat,
-                avatar_url: characters[this_chid]?.avatar,
-                from_index: startIndex,
-                limit,
-            };
-
-        const response = await fetch(endpoint, {
-            method: 'POST',
-            headers: getRequestHeaders(),
-            body: JSON.stringify(body),
-            cache: 'no-cache',
-        });
-
-        if (response.ok) {
-            const delta = await response.json();
-            const olderMessages = Array.isArray(delta?.chat) ? delta.chat : [];
-            if (olderMessages.length > 0) {
-                chat.unshift(...olderMessages);
-                const olderMessageElements = olderMessages.map((olderMessage, offset) => addOneMessage(olderMessage, {
-                    scroll: false,
-                    forceId: offset,
-                    showSwipes: false,
-                    insert: false,
-                })[0]);
-
-                if (olderMessageElements.length) {
-                    if (showMoreButton[0]) {
-                        showMoreButton.after(olderMessageElements);
-                    } else {
-                        chatElement.prepend(olderMessageElements);
-                    }
-                }
-
-                updateViewMessageIds(0);
-                refreshSwipeButtons();
-                applyCharacterTagsToMessageDivs({ mesIds: lodash.range(0, olderMessages.length, 1) });
-                applyStylePins();
-
-                chatServerState.nextOlderIndex = Math.max(0, Number(delta?.from_index) || 0);
-                chatServerState.totalMessages = Math.max(chatServerState.totalMessages, Number(delta?.total_messages) || chat.length);
-                chatServerState.hasMore = Boolean(delta?.has_more);
-            } else {
-                chatServerState.hasMore = false;
-            }
-        } else {
-            console.warn('Could not load older messages from server delta endpoint.');
-        }
-
-        if (!chatServerState.hasMore && messageId === 0) {
-            $('#show_more_messages').remove();
-        }
-
-        if (isButtonInView) {
-            const newHeight = chatElement.prop('scrollHeight');
-            chatElement.scrollTop(newHeight - prevHeight);
-        }
-
-        await eventSource.emit(event_types.MORE_MESSAGES_LOADED);
-        return;
-    }
-
     console.debug('Inserting messages before', messageId, 'count', count, 'chat length', chat.length);
     const prevHeight = chatElement.prop('scrollHeight');
     const isButtonInView = isElementInViewport($('#show_more_messages')[0]);
@@ -3563,7 +3513,7 @@ export async function showMoreMessages(messagesToLoad = null) {
     messageId = firstId;
     refreshSwipeButtons();
 
-    if (messageId == 0 && !chatServerState.hasMore) {
+    if (messageId == 0) {
         $('#show_more_messages').remove();
     }
 
@@ -3581,7 +3531,7 @@ export async function printMessages() {
     let startIndex = 0;
     let count = power_user.chat_truncation || Number.MAX_SAFE_INTEGER;
 
-    if (chat.length > count || chatServerState.hasMore) {
+    if (chat.length > count) {
         startIndex = chat.length - count;
         startIndex = Math.max(0, startIndex);
         if (!$('#show_more_messages').length) {
@@ -3688,8 +3638,14 @@ export function cancelDebouncedChatSave() {
  * Visually removes all chat message elements.
  * @param {object} [options] Options
  * @param {boolean} [options.clearData=false] Optionally clear the chat array's contents.
+ * @param {function(): boolean} [options.isCurrent] Whether the originating chat entry still owns the clear.
  */
-export async function clearChat({ clearData = false } = {}) {
+export async function clearChat({ clearData = false, isCurrent = undefined } = {}) {
+    if (isCurrent) {
+        await saveItemizedPrompts(getCurrentChatId());
+        if (!isCurrent()) return;
+    }
+
     stopLukerGenerationRecovery();
     cancelDebouncedChatSave();
     cancelDebouncedMetadataSave();
@@ -3705,7 +3661,7 @@ export async function clearChat({ clearData = false } = {}) {
         $('.zoomed_avatar[forChar]').remove();
     } else { console.debug('saw no avatars'); }
 
-    await saveItemizedPrompts(getCurrentChatId());
+    if (!isCurrent) await saveItemizedPrompts(getCurrentChatId());
     itemizedPrompts.length = 0;
 
     if (clearData) chat.length = 0;
@@ -9841,6 +9797,15 @@ async function generateInternal(type, { automatic_trigger, force_name2, quiet_pr
         const isAbortedError = abortController?.signal?.aborted
             || exception?.name === 'AbortError'
             || /aborted/i.test(String(exception?.message || ''));
+        // A server-initiated abort (request inspector) arrives as an
+        // AbortError but the local controller was never aborted. Flip it so
+        // every downstream check (auto-continue, auto-swipe, retry helpers)
+        // sees the same state as a user stop. Quiet requests share the
+        // module-level controller with the main turn; aborting it from a
+        // background request would cancel the visible reply.
+        if (type !== 'quiet' && exception?.name === 'AbortError' && abortController && !abortController.signal.aborted) {
+            abortController.abort('Aborted by server');
+        }
         const errorMessage = typeof exception?.error?.message === 'string'
             ? exception.error.message
             : (typeof exception?.message === 'string'
@@ -12162,6 +12127,8 @@ export function resolveChatStateTarget(target = null) {
 
 const chatStateRequestCache = new Map();
 const presetStateRequestCache = new Map();
+const chatStateRequestGeneration = new Map();
+const presetStateRequestGeneration = new Map();
 let settingsGetCacheGeneration = 0;
 
 function normalizePresetStateApiId(apiId = '') {
@@ -12206,34 +12173,45 @@ function getPresetStateTargetKey(target) {
 }
 
 function getPresetStateRequestKey(target, namespace) {
-    return `${getPresetStateTargetKey(target)}::${String(namespace || '').trim().toLowerCase()}`;
+    return `${getPresetStateTargetKey(target)}::${normalizeStateNamespace(namespace)}`;
 }
 
-function invalidatePresetStateRequestCache(target, namespaces = []) {
+async function invalidatePresetStateRequestCache(target, namespaces = []) {
     const targetKey = getPresetStateTargetKey(target);
     if (!targetKey) {
         return;
     }
 
     const normalizedNamespaces = [...new Set((Array.isArray(namespaces) ? namespaces : [namespaces])
-        .map((namespace) => String(namespace || '').trim().toLowerCase())
+        .map(normalizeStateNamespace)
         .filter(Boolean))];
     for (const namespace of normalizedNamespaces) {
-        presetStateRequestCache.delete(getPresetStateRequestKey(target, namespace));
+        const key = getPresetStateRequestKey(target, namespace);
+        presetStateRequestCache.delete(key);
+        presetStateRequestGeneration.set(key, (presetStateRequestGeneration.get(key) || 0) + 1);
     }
+    await invalidateStateResources('/api/presets/state/get', {
+        apiId: normalizePresetStateApiId(target.collection || target.apiId || target.type),
+        name: target.name,
+    }, normalizedNamespaces);
 }
 
-function invalidateAllPresetStateRequestCache(target) {
+async function invalidateAllPresetStateRequestCache(target) {
     const targetKey = getPresetStateTargetKey(target);
     if (!targetKey) {
         return;
     }
 
-    for (const cacheKey of [...presetStateRequestCache.keys()]) {
+    for (const cacheKey of new Set([...presetStateRequestCache.keys(), ...presetStateRequestGeneration.keys()])) {
         if (cacheKey.startsWith(`${targetKey}::`)) {
             presetStateRequestCache.delete(cacheKey);
+            presetStateRequestGeneration.set(cacheKey, (presetStateRequestGeneration.get(cacheKey) || 0) + 1);
         }
     }
+    await invalidateStateResources('/api/presets/state/get', {
+        apiId: normalizePresetStateApiId(target.collection || target.apiId || target.type),
+        name: target.name,
+    });
 }
 
 function getChatStateTargetKey(target) {
@@ -12249,21 +12227,29 @@ function getChatStateTargetKey(target) {
 }
 
 function getChatStateRequestKey(target, namespace) {
-    return `${getChatStateTargetKey(target)}::${String(namespace || '').trim().toLowerCase()}`;
+    return `${getChatStateTargetKey(target)}::${normalizeStateNamespace(namespace)}`;
 }
 
-function invalidateChatStateRequestCache(target, namespaces = []) {
+async function invalidateChatStateRequestCache(target, namespaces = []) {
     const targetKey = getChatStateTargetKey(target);
     if (!targetKey) {
         return;
     }
 
     const normalizedNamespaces = [...new Set((Array.isArray(namespaces) ? namespaces : [namespaces])
-        .map((namespace) => String(namespace || '').trim().toLowerCase())
+        .map(normalizeStateNamespace)
         .filter(Boolean))];
     for (const namespace of normalizedNamespaces) {
-        chatStateRequestCache.delete(getChatStateRequestKey(target, namespace));
+        const key = getChatStateRequestKey(target, namespace);
+        chatStateRequestCache.delete(key);
+        chatStateRequestGeneration.set(key, (chatStateRequestGeneration.get(key) || 0) + 1);
     }
+    await invalidateStateResources('/api/chats/state/get', {
+        is_group: target.is_group ? 'true' : 'false',
+        id: target.id,
+        avatar_url: target.avatar_url,
+        file_name: target.file_name,
+    }, normalizedNamespaces);
 }
 
 function isPlainObject(value) {
@@ -12274,7 +12260,7 @@ function isPlainObject(value) {
     return prototype === Object.prototype || prototype === null;
 }
 
-export { cloneAsJsonWire };
+export { cloneAsJsonWire, listPresetDocuments, readPresetDocument };
 
 function normalizeJsonObject(value) {
     const normalized = cloneAsJsonWire(value);
@@ -12760,6 +12746,10 @@ function syncCurrentChatIntegrityFromMetadata(metadata = null) {
     if (!chat_metadata || typeof chat_metadata !== 'object') {
         return;
     }
+    // A late response cannot authorize a group cleared by a pending or failed load.
+    if (selected_group && !chat_metadata.integrity) {
+        return;
+    }
 
     const nextIntegrity = typeof metadata?.integrity === 'string'
         ? metadata.integrity.trim()
@@ -12786,27 +12776,33 @@ export function applyIntegrityFromWritePayloadToTarget(payload, target = null, m
         metadata.integrity = nextIntegrity;
     }
 
+    // Incremental acknowledgements rotate only the accepted target's cached token,
+    // not its unsent metadata fields or a missing initialization baseline.
+    if (target?.is_group) {
+        const snapshot = getChatMetadataSnapshot(target);
+        if (snapshot) rememberChatMetadataSnapshot(target, { ...snapshot, integrity: nextIntegrity });
+    }
+
     if (isActiveChatStateTarget(target)) {
         syncCurrentChatIntegrityFromMetadata({ integrity: nextIntegrity });
     }
 }
 
 /**
- * Refreshes the integrity slug on a snapshotted metadata object from the live
- * `chat_metadata.integrity` if the snapshot belongs to the currently active chat.
- *
- * Save tasks queue via runSerializedChatWrite, but their saveContext (including
- * metadataSnapshot.integrity) is captured synchronously at call time. If another
- * save runs first and advances the server integrity, the live `chat_metadata`
- * is updated but the queued task's snapshot is not — sending the snapshot's
- * stale integrity then triggers a 409. Calling this just before each fetch
- * pulls the freshest integrity into the snapshot so the request lines up with
- * whatever the server actually has now (without overriding any of the
- * snapshot's other fields).
+ * Refreshes a queued write's token without replacing its captured metadata.
+ * Group acknowledgements remain target-owned while live metadata is unloaded
+ * or another chat is active. Solo writes retain their active-live token source.
  */
 export function refreshSnapshotIntegrityFromActiveLive(target, metadata) {
     if (!isPlainObject(metadata)) {
         return;
+    }
+    if (target?.is_group) {
+        const acknowledgedIntegrity = getChatMetadataSnapshot(target)?.integrity;
+        if (acknowledgedIntegrity) {
+            metadata.integrity = acknowledgedIntegrity;
+            return;
+        }
     }
     if (!isActiveChatStateTarget(target)) {
         return;
@@ -12817,6 +12813,9 @@ export function refreshSnapshotIntegrityFromActiveLive(target, metadata) {
     const liveIntegrity = typeof chat_metadata.integrity === 'string'
         ? chat_metadata.integrity.trim()
         : '';
+    if (target?.is_group && !liveIntegrity) {
+        return;
+    }
     if (liveIntegrity) {
         metadata.integrity = liveIntegrity;
     } else {
@@ -12830,35 +12829,33 @@ async function fetchCurrentServerChatSnapshot(target = resolveChatStateTarget())
         return null;
     }
 
+    if (resolvedTarget.is_group) {
+        const payload = await loadGroupChat(resolvedTarget.id);
+        const hasHeader = Object.hasOwn(payload[0] ?? {}, 'chat_metadata');
+        return {
+            target: resolvedTarget,
+            metadata: isPlainObject(payload[0]?.chat_metadata) ? cloneAsJsonWire(payload[0].chat_metadata) : {},
+            // Snapshot guards use stored bytes, not rendering-time media migration.
+            messages: hasHeader ? payload.slice(1) : payload,
+        };
+    }
+
     try {
-        let response;
-
-        if (resolvedTarget.is_group) {
-            response = await fetch('/api/chats/group/get', {
-                method: 'POST',
-                cache: 'no-cache',
-                headers: getRequestHeaders(),
-                body: JSON.stringify({
-                    id: resolvedTarget.id,
-                }),
-            });
-        } else {
-            const charName = String(resolvedTarget.char_name || getCharacterName(characters[this_chid]) || '').trim();
-            if (!charName) {
-                return null;
-            }
-
-            response = await fetch('/api/chats/get', {
-                method: 'POST',
-                cache: 'no-cache',
-                headers: getRequestHeaders(),
-                body: JSON.stringify({
-                    ch_name: charName,
-                    file_name: resolvedTarget.file_name,
-                    avatar_url: resolvedTarget.avatar_url,
-                }),
-            });
+        const charName = String(resolvedTarget.char_name || getCharacterName(characters[this_chid]) || '').trim();
+        if (!charName) {
+            return null;
         }
+
+        const response = await fetch('/api/chats/get', {
+            method: 'POST',
+            cache: 'no-cache',
+            headers: getRequestHeaders(),
+            body: JSON.stringify({
+                ch_name: charName,
+                file_name: resolvedTarget.file_name,
+                avatar_url: resolvedTarget.avatar_url,
+            }),
+        });
 
         if (!response.ok) {
             return null;
@@ -13043,29 +13040,33 @@ export async function getChatStateBatch(namespaces, options = {}) {
         ) };
     }
 
-    let response;
+    const generations = new Map(need.map((ns) => {
+        const requestKey = getChatStateRequestKey(target, ns);
+        const generation = chatStateRequestGeneration.get(requestKey) || 0;
+        chatStateRequestGeneration.set(requestKey, generation);
+        return [requestKey, generation];
+    }));
+
+    let payloads;
     try {
-        response = await fetch('/api/chats/state/get-batch', {
-            method: 'POST',
-            cache: 'no-cache',
-            headers: getRequestHeaders(),
-            body: JSON.stringify({ ...target, namespaces: need }),
-        });
+        payloads = await Promise.all(need.map((namespace) => readStateEnvelope('/api/chats/state/get', {
+            is_group: target.is_group ? 'true' : 'false',
+            id: target.id,
+            avatar_url: target.avatar_url,
+            file_name: target.file_name,
+            namespace,
+        })));
     } catch (error) {
+        if (error?.status) {
+            return { ok: false, results: new Map(),
+                reason: STATE_ERROR_REASONS.HTTP_ERROR,
+                hint: formatHttpErrorHint(error.status, '', error.message) };
+        }
         console.warn('Chat state batch read failed (transport)', error);
         return { ok: false, results: new Map(),
             reason: STATE_ERROR_REASONS.TRANSPORT_ERROR,
             hint: formatTransportErrorHint(error?.message || error) };
     }
-    if (!response.ok) {
-        const bodyText = await response.text().catch(() => '');
-        return { ok: false, results: new Map(),
-            reason: STATE_ERROR_REASONS.HTTP_ERROR,
-            hint: formatHttpErrorHint(response.status, response.statusText, bodyText) };
-    }
-    const payload = await response.json().catch(() => null);
-    const data = (payload && typeof payload === 'object' && payload.data && typeof payload.data === 'object')
-        ? payload.data : {};
 
     const results = new Map();
     for (const ns of cleaned) {
@@ -13073,27 +13074,16 @@ export async function getChatStateBatch(namespaces, options = {}) {
             results.set(ns, { ok: true, state: fromCache.get(ns) ?? null });
             continue;
         }
-        const raw = Object.prototype.hasOwnProperty.call(data, ns) ? data[ns] : null;
+        const index = need.indexOf(ns);
+        const payload = payloads[index];
+        const raw = payload && typeof payload === 'object' ? payload.data ?? null : null;
         const requestKey = getChatStateRequestKey(target, ns);
-        chatStateRequestCache.set(requestKey, raw);
+        if ((chatStateRequestGeneration.get(requestKey) || 0) === generations.get(requestKey)) {
+            chatStateRequestCache.set(requestKey, raw);
+        }
         results.set(ns, { ok: true, state: raw });
     }
     return { ok: true, results };
-}
-
-/**
- * Internal helper: reads raw chat state for namespaces during the envelope
- * migration window. Unwraps the future {ok, state} envelope and returns the
- * raw state object (or null). Used by producers that need the baseline state
- * to compute optimistic `test` operations.
- *
- * @param {string} namespace Chat state namespace.
- * @param {object} [options] Additional options forwarded to getChatState.
- * @returns {Promise<object|null>} Raw state object or null.
- */
-async function getChatStateRaw(namespace, options = {}) {
-    const result = await getChatState(namespace, options);
-    return result?.ok ? result.state : null;
 }
 
 /**
@@ -13147,7 +13137,7 @@ export async function patchChatState(namespace, operations, options = {}) {
             return makeStateError(STATE_ERROR_REASONS.VALIDATION_TARGET,
                 formatValidationTargetHint('no active chat (chatId resolution failed)'));
         }
-        invalidateChatStateRequestCache(target, [stateNamespace]);
+        await invalidateChatStateRequestCache(target, [stateNamespace]);
         const sourceOperations = operations.filter(op => op && typeof op === 'object');
         const baseOperations = sourceOperations.filter(op => String(op.op || '').trim().toLowerCase() !== 'test');
         if (baseOperations.length === 0) {
@@ -13168,18 +13158,21 @@ export async function patchChatState(namespace, operations, options = {}) {
             });
         };
 
-        let currentState = await getChatStateRaw(stateNamespace, { target });
-        let response = await patchOnce(currentState);
+        let current = await getChatState(stateNamespace, { target });
+        if (!current.ok) return makeStateError(current.reason, current.hint);
+        let response = await patchOnce(current.state);
         let retries = 0;
 
         if (response.status === 409) {
             retries = 1;
-            currentState = await getChatStateRaw(stateNamespace, { target });
-            response = await patchOnce(currentState);
+            await invalidateChatStateRequestCache(target, [stateNamespace]);
+            current = await getChatState(stateNamespace, { target });
+            if (!current.ok) return makeStateError(current.reason, current.hint);
+            response = await patchOnce(current.state);
         }
 
         if (response.ok) {
-            invalidateChatStateRequestCache(target, [stateNamespace]);
+            await invalidateChatStateRequestCache(target, [stateNamespace]);
             return makeStateOk();
         }
 
@@ -13227,8 +13220,6 @@ export async function updateChatState(namespace, updater, options = {}) {
             return makeStateError(STATE_ERROR_REASONS.VALIDATION_TARGET,
                 formatValidationTargetHint('no active chat (chatId resolution failed)'));
         }
-        invalidateChatStateRequestCache(target, [stateNamespace]);
-
         const maxOperations = Number.isInteger(options?.maxOperations) && options.maxOperations > 0
             ? Number(options.maxOperations)
             : 2000;
@@ -13238,8 +13229,10 @@ export async function updateChatState(namespace, updater, options = {}) {
 
         let lastFailure = null;
         for (let attempt = 0; attempt <= maxRetries; attempt++) {
-            const currentStateRaw = await getChatStateRaw(stateNamespace, { target });
-            const currentState = normalizeJsonObject(currentStateRaw);
+            await invalidateChatStateRequestCache(target, [stateNamespace]);
+            const current = await getChatState(stateNamespace, { target });
+            if (!current.ok) return makeStateError(current.reason, current.hint);
+            const currentState = normalizeJsonObject(current.state);
             let nextStateRaw;
             try {
                 nextStateRaw = await updater(cloneAsJsonWire(currentState), {
@@ -13268,7 +13261,6 @@ export async function updateChatState(namespace, updater, options = {}) {
 
             const patchResult = await patchChatState(stateNamespace, operations, { target });
             if (patchResult.ok) {
-                invalidateChatStateRequestCache(target, [stateNamespace]);
                 return makeStateOk({ state: nextState, updated: true });
             }
             lastFailure = patchResult;
@@ -13306,14 +13298,17 @@ export async function deleteChatState(namespace, options = {}) {
             return makeStateError(STATE_ERROR_REASONS.VALIDATION_TARGET,
                 formatValidationTargetHint('no active chat (chatId resolution failed)'));
         }
-        invalidateChatStateRequestCache(target, [stateNamespace]);
+        await invalidateChatStateRequestCache(target, [stateNamespace]);
         const response = await fetch('/api/chats/state/delete', {
             method: 'POST',
             cache: 'no-cache',
             headers: getRequestHeaders(),
             body: JSON.stringify({ ...target, namespace: stateNamespace }),
         });
-        if (response.ok) return makeStateOk();
+        if (response.ok) {
+            await invalidateChatStateRequestCache(target, [stateNamespace]);
+            return makeStateOk();
+        }
         const bodyText = await response.text().catch(() => '');
         return makeStateError(
             STATE_ERROR_REASONS.HTTP_ERROR,
@@ -13372,29 +13367,31 @@ export async function getPresetStateBatch(namespaces, options = {}) {
         ) };
     }
 
-    let response;
+    const generations = new Map(need.map((ns) => {
+        const requestKey = getPresetStateRequestKey(target, ns);
+        const generation = presetStateRequestGeneration.get(requestKey) || 0;
+        presetStateRequestGeneration.set(requestKey, generation);
+        return [requestKey, generation];
+    }));
+
+    let payloads;
     try {
-        response = await fetch('/api/presets/state/get-batch', {
-            method: 'POST',
-            cache: 'no-cache',
-            headers: getRequestHeaders(),
-            body: JSON.stringify({ apiId: target.apiId, name: target.name, namespaces: need }),
-        });
+        payloads = await Promise.all(need.map((namespace) => readStateEnvelope('/api/presets/state/get', {
+            apiId: target.apiId,
+            name: target.name,
+            namespace,
+        })));
     } catch (error) {
+        if (error?.status) {
+            return { ok: false, results: new Map(),
+                reason: STATE_ERROR_REASONS.HTTP_ERROR,
+                hint: formatHttpErrorHint(error.status, '', error.message) };
+        }
         console.warn('Preset state batch read failed (transport)', error);
         return { ok: false, results: new Map(),
             reason: STATE_ERROR_REASONS.TRANSPORT_ERROR,
             hint: formatTransportErrorHint(error?.message || error) };
     }
-    if (!response.ok) {
-        const bodyText = await response.text().catch(() => '');
-        return { ok: false, results: new Map(),
-            reason: STATE_ERROR_REASONS.HTTP_ERROR,
-            hint: formatHttpErrorHint(response.status, response.statusText, bodyText) };
-    }
-    const payload = await response.json().catch(() => null);
-    const data = (payload && typeof payload === 'object' && payload.data && typeof payload.data === 'object')
-        ? payload.data : {};
 
     const results = new Map();
     for (const ns of cleaned) {
@@ -13402,27 +13399,16 @@ export async function getPresetStateBatch(namespaces, options = {}) {
             results.set(ns, { ok: true, state: fromCache.get(ns) ?? null });
             continue;
         }
-        const raw = Object.prototype.hasOwnProperty.call(data, ns) ? data[ns] : null;
+        const index = need.indexOf(ns);
+        const payload = payloads[index];
+        const raw = payload && typeof payload === 'object' ? payload.data ?? null : null;
         const requestKey = getPresetStateRequestKey(target, ns);
-        presetStateRequestCache.set(requestKey, raw);
+        if ((presetStateRequestGeneration.get(requestKey) || 0) === generations.get(requestKey)) {
+            presetStateRequestCache.set(requestKey, raw);
+        }
         results.set(ns, { ok: true, state: raw });
     }
     return { ok: true, results };
-}
-
-/**
- * Internal helper: reads raw preset state for a namespace during the envelope
- * migration window. Unwraps the future {ok, state} envelope and returns the
- * raw state object (or null). Used by producers that need the baseline state
- * to compute optimistic `test` operations.
- *
- * @param {string} namespace Preset state namespace.
- * @param {object} [options] Additional options forwarded to getPresetState.
- * @returns {Promise<object|null>} Raw state object or null.
- */
-async function getPresetStateRaw(namespace, options = {}) {
-    const result = await getPresetState(namespace, options);
-    return result?.ok ? result.state : null;
 }
 
 /**
@@ -13476,7 +13462,7 @@ export async function patchPresetState(namespace, operations, options = {}) {
             return makeStateError(STATE_ERROR_REASONS.VALIDATION_TARGET,
                 formatValidationTargetHint('no active preset (apiId/name resolution failed)'));
         }
-        invalidatePresetStateRequestCache(target, [stateNamespace]);
+        await invalidatePresetStateRequestCache(target, [stateNamespace]);
         const sourceOperations = operations.filter(op => op && typeof op === 'object');
         const baseOperations = sourceOperations.filter(op => String(op.op || '').trim().toLowerCase() !== 'test');
         if (baseOperations.length === 0) {
@@ -13498,18 +13484,21 @@ export async function patchPresetState(namespace, operations, options = {}) {
             });
         };
 
-        let currentState = await getPresetStateRaw(stateNamespace, { target });
-        let response = await patchOnce(currentState);
+        let current = await getPresetState(stateNamespace, { target });
+        if (!current.ok) return makeStateError(current.reason, current.hint);
+        let response = await patchOnce(current.state);
         let retries = 0;
 
         if (response.status === 409) {
             retries = 1;
-            currentState = await getPresetStateRaw(stateNamespace, { target });
-            response = await patchOnce(currentState);
+            await invalidatePresetStateRequestCache(target, [stateNamespace]);
+            current = await getPresetState(stateNamespace, { target });
+            if (!current.ok) return makeStateError(current.reason, current.hint);
+            response = await patchOnce(current.state);
         }
 
         if (response.ok) {
-            invalidatePresetStateRequestCache(target, [stateNamespace]);
+            await invalidatePresetStateRequestCache(target, [stateNamespace]);
             return makeStateOk();
         }
 
@@ -13557,8 +13546,6 @@ export async function updatePresetState(namespace, updater, options = {}) {
             return makeStateError(STATE_ERROR_REASONS.VALIDATION_TARGET,
                 formatValidationTargetHint('no active preset (apiId/name resolution failed)'));
         }
-        invalidatePresetStateRequestCache(target, [stateNamespace]);
-
         const maxOperations = Number.isInteger(options?.maxOperations) && options.maxOperations > 0
             ? Number(options.maxOperations)
             : 2000;
@@ -13568,8 +13555,10 @@ export async function updatePresetState(namespace, updater, options = {}) {
 
         let lastFailure = null;
         for (let attempt = 0; attempt <= maxRetries; attempt++) {
-            const currentStateRaw = await getPresetStateRaw(stateNamespace, { target });
-            const currentState = normalizeJsonObject(currentStateRaw);
+            await invalidatePresetStateRequestCache(target, [stateNamespace]);
+            const current = await getPresetState(stateNamespace, { target });
+            if (!current.ok) return makeStateError(current.reason, current.hint);
+            const currentState = normalizeJsonObject(current.state);
             let nextStateRaw;
             try {
                 nextStateRaw = await updater(cloneAsJsonWire(currentState), {
@@ -13598,7 +13587,6 @@ export async function updatePresetState(namespace, updater, options = {}) {
 
             const patchResult = await patchPresetState(stateNamespace, operations, { target });
             if (patchResult.ok) {
-                invalidatePresetStateRequestCache(target, [stateNamespace]);
                 return makeStateOk({ state: nextState, updated: true });
             }
             lastFailure = patchResult;
@@ -13636,7 +13624,7 @@ export async function deletePresetState(namespace, options = {}) {
             return makeStateError(STATE_ERROR_REASONS.VALIDATION_TARGET,
                 formatValidationTargetHint('no active preset (apiId/name resolution failed)'));
         }
-        invalidatePresetStateRequestCache(target, [stateNamespace]);
+        await invalidatePresetStateRequestCache(target, [stateNamespace]);
         const response = await fetch('/api/presets/state/delete', {
             method: 'POST',
             cache: 'no-cache',
@@ -13647,7 +13635,10 @@ export async function deletePresetState(namespace, options = {}) {
                 namespace: stateNamespace,
             }),
         });
-        if (response.ok) return makeStateOk();
+        if (response.ok) {
+            await invalidatePresetStateRequestCache(target, [stateNamespace]);
+            return makeStateOk();
+        }
         const bodyText = await response.text().catch(() => '');
         return makeStateError(
             STATE_ERROR_REASONS.HTTP_ERROR,
@@ -13674,7 +13665,7 @@ export async function deleteAllPresetState(target = null) {
             return makeStateError(STATE_ERROR_REASONS.VALIDATION_TARGET,
                 'No active preset to resolve apiId/name from — select a preset before calling deleteAllPresetState.');
         }
-        invalidateAllPresetStateRequestCache(resolvedTarget);
+        await invalidateAllPresetStateRequestCache(resolvedTarget);
 
         const response = await fetch('/api/presets/state/delete-all', {
             method: 'POST',
@@ -13687,7 +13678,7 @@ export async function deleteAllPresetState(target = null) {
         });
 
         if (response.ok) {
-            invalidateAllPresetStateRequestCache(resolvedTarget);
+            await invalidateAllPresetStateRequestCache(resolvedTarget);
             return makeStateOk();
         }
         const bodyText = await response.text().catch(() => '');
@@ -13717,8 +13708,8 @@ export async function renamePresetStateTarget(sourceTarget = null, targetTarget 
         if (!source || !target || source.apiId !== target.apiId) {
             return false;
         }
-        invalidateAllPresetStateRequestCache(source);
-        invalidateAllPresetStateRequestCache(target);
+        await invalidateAllPresetStateRequestCache(source);
+        await invalidateAllPresetStateRequestCache(target);
 
         const response = await fetch('/api/presets/state/rename', {
             method: 'POST',
@@ -13732,8 +13723,8 @@ export async function renamePresetStateTarget(sourceTarget = null, targetTarget 
         });
 
         if (response.ok) {
-            invalidateAllPresetStateRequestCache(source);
-            invalidateAllPresetStateRequestCache(target);
+            await invalidateAllPresetStateRequestCache(source);
+            await invalidateAllPresetStateRequestCache(target);
         }
 
         return response.ok;
@@ -13741,10 +13732,6 @@ export async function renamePresetStateTarget(sourceTarget = null, targetTarget 
         console.warn('Preset state rename failed', error);
         return false;
     }
-}
-
-function applyIntegrityFromWritePayload(payload) {
-    applyIntegrityFromWritePayloadToTarget(payload, resolveChatStateTarget(), chat_metadata);
 }
 
 export function invalidateChatWriteSnapshot(target = resolveChatStateTarget()) {
@@ -13767,14 +13754,6 @@ async function readChatWriteConflictPayload(response) {
     } catch {
         return null;
     }
-}
-
-async function resolveChatWriteConflict(response, retryCount = 0, requestContext = null, target = null) {
-    // target is captured by the caller BEFORE the await, so a chat switch
-    // during the round-trip doesn't make us invalidate the wrong snapshot.
-    // Fall back to active target only if the caller didn't pass one.
-    const resolvedTarget = target ?? resolveChatStateTarget();
-    return await resolveChatWriteConflictForTarget(response, resolvedTarget, chat_metadata, retryCount, requestContext);
 }
 
 /**
@@ -14151,7 +14130,7 @@ export async function resolveChatWriteConflictForTarget(response, target = null,
  * @param {ChatMessage[]} messages Messages to append.
  * @returns {Promise<boolean>} True on successful append.
  */
-async function appendChatMessagesInternal(messages, retryCount = 0) {
+async function appendChatMessagesInternal(messages, retryCount = 0, context = null) {
     if (!Array.isArray(messages) || messages.length === 0) {
         return true;
     }
@@ -14162,7 +14141,8 @@ async function appendChatMessagesInternal(messages, retryCount = 0) {
     // trips the guard in saveChatInternal instead of full-saving an empty body.
     // Without a resolvable save target there is nothing to overwrite, so drop
     // the write silently instead of raising a data-loss alert.
-    if (!chat_metadata?.integrity) {
+    const metadata = context?.metadataSnapshot ?? cloneAsJsonWire(chat_metadata);
+    if (!metadata?.integrity) {
         if (isChatTransitionInProgress()) {
             console.debug('[ChatWrite] Append dropped: chat transition in progress.');
             return false;
@@ -14183,7 +14163,7 @@ async function appendChatMessagesInternal(messages, retryCount = 0) {
     /** @type {ReturnType<typeof resolveChatStateTarget> | null} */
     let target = null;
     try {
-        target = resolveChatStateTarget();
+        target = context?.target ?? resolveChatStateTarget();
         const generationIds = summarizeLukerGenerationIdsForMessages(messages);
 
         // Optimistic snapshot commit: set BEFORE the fetch to what BE state will
@@ -14194,19 +14174,20 @@ async function appendChatMessagesInternal(messages, retryCount = 0) {
         // those changes into snapshot without ever sending them to BE → drift.
         const snapshotKey = target ? getChatMessageSnapshotKey(target) : null;
         const previousMessages = snapshotKey ? chatMessageSnapshotCache.get(snapshotKey) : null;
+        // An unacknowledged group initialization needs the caller's complete
+        // save, not an append that would omit its displayed greeting.
+        if (target?.is_group && !Array.isArray(previousMessages)) {
+            return false;
+        }
         if (Array.isArray(previousMessages) && snapshotKey) {
             // rememberChatMessageSnapshot deep-clones internally, so spreading
             // raw references is safe here — they get frozen on `.set`.
             rememberChatMessageSnapshot(target, [...previousMessages, ...messages]);
         }
 
-        if (selected_group) {
-            const group = groups.find(x => x.id == selected_group);
-            const groupChatId = group?.chat_id;
-            if (!groupChatId) {
-                return false;
-            }
-
+        if (target?.is_group) {
+            const groupChatId = target.id;
+            refreshSnapshotIntegrityFromActiveLive(target, metadata);
             const response = await fetch('/api/chats/group/append', {
                 method: 'POST',
                 cache: 'no-cache',
@@ -14214,8 +14195,8 @@ async function appendChatMessagesInternal(messages, retryCount = 0) {
                 body: JSON.stringify({
                     id: groupChatId,
                     messages: messages,
-                    chat_metadata: { ...chat_metadata },
-                    integrity: chat_metadata?.integrity,
+                    chat_metadata: { ...metadata },
+                    integrity: metadata.integrity,
                     luker_generation_id: getLastLukerGenerationIdForApi(),
                 }),
             });
@@ -14241,21 +14222,21 @@ async function appendChatMessagesInternal(messages, retryCount = 0) {
                     // from server truth to realign before the next write builds
                     // diffs against a snapshot BE can't match.
                     const refreshed = await refreshChatWriteSnapshotsFromServer(target);
-                    return Boolean(refreshed && lodash.isEqual(refreshed.messages, chat));
+                    return Boolean(refreshed && lodash.isEqual(refreshed.messages, context.messagesSnapshot));
                 }
-                applyIntegrityFromWritePayload(payload);
+                applyIntegrityFromWritePayloadToTarget(payload, target, metadata);
                 // Snapshot already committed optimistically before the fetch.
                 return true;
             }
-            // Any 409 surfaces via resolveChatWriteConflict (toast + event + snapshot
+            // Any 409 surfaces via resolveChatWriteConflictForTarget (toast + event + snapshot
             // invalidation + integrity refresh). Returning false lets the caller's
             // saveChatConditional fallback do a full /api/chats/save and restore
             // BE = FE (FE-wins).
-            await resolveChatWriteConflict(response, retryCount, {
+            await resolveChatWriteConflictForTarget(response, target, metadata, retryCount, {
                 endpoint: 'chats/group/append',
                 opSummary: summarizeAppendedMessages(messages),
-                sentIntegrity: chat_metadata?.integrity,
-            }, target);
+                sentIntegrity: metadata.integrity,
+            });
             return false;
         }
 
@@ -14276,8 +14257,8 @@ async function appendChatMessagesInternal(messages, retryCount = 0) {
                 file_name: fileName,
                 messages: messages,
                 avatar_url: avatar,
-                chat_metadata: { ...chat_metadata },
-                integrity: chat_metadata?.integrity,
+                chat_metadata: { ...metadata },
+                integrity: metadata.integrity,
                 luker_generation_id: getLastLukerGenerationIdForApi(),
             }),
         });
@@ -14305,17 +14286,17 @@ async function appendChatMessagesInternal(messages, retryCount = 0) {
                 const refreshed = await refreshChatWriteSnapshotsFromServer(target);
                 return Boolean(refreshed && lodash.isEqual(refreshed.messages, chat));
             }
-            applyIntegrityFromWritePayload(payload);
+            applyIntegrityFromWritePayloadToTarget(payload, target, metadata);
             // Snapshot already committed optimistically before the fetch.
             return true;
         }
         // See group-branch comment: any 409 → toast/event/snapshot-invalidate via
-        // resolveChatWriteConflict, then return false to let caller full-save.
-        await resolveChatWriteConflict(response, retryCount, {
+        // resolveChatWriteConflictForTarget, then return false to let caller full-save.
+        await resolveChatWriteConflictForTarget(response, target, metadata, retryCount, {
             endpoint: 'chats/append',
             opSummary: summarizeAppendedMessages(messages),
-            sentIntegrity: chat_metadata?.integrity,
-        }, target);
+            sentIntegrity: metadata.integrity,
+        });
         return false;
     } catch (error) {
         console.warn('Incremental chat append failed', error);
@@ -14332,7 +14313,9 @@ async function appendChatMessagesInternal(messages, retryCount = 0) {
 
 export async function appendChatMessages(messages, retryCount = 0) {
     const queuedMessages = cloneAsJsonWire(messages) ?? messages;
-    return await runSerializedChatWrite(() => appendChatMessagesInternal(queuedMessages, retryCount));
+    const context = selected_group ? buildActiveChatSaveContext() : null;
+    if (selected_group && !context) return false;
+    return await runSerializedChatWrite(() => appendChatMessagesInternal(queuedMessages, retryCount, context));
 }
 
 /**
@@ -14341,7 +14324,7 @@ export async function appendChatMessages(messages, retryCount = 0) {
  * @param {object[]|object} operations Patch operations (single op or op array).
  * @returns {Promise<boolean>} True on successful patch.
  */
-async function patchChatMessagesInternal(operations, retryCount = 0) {
+async function patchChatMessagesInternal(operations, retryCount = 0, context = null) {
     const normalizedOperations = Array.isArray(operations)
         ? operations
         : (operations && typeof operations === 'object' ? [operations] : []);
@@ -14354,7 +14337,8 @@ async function patchChatMessagesInternal(operations, retryCount = 0) {
     // saveChatInternal for full rationale). Same false-return semantics as
     // appendChatMessagesInternal: a write with no resolvable save target has
     // nothing to overwrite, so it is dropped silently.
-    if (!chat_metadata?.integrity) {
+    const metadata = context?.metadataSnapshot ?? cloneAsJsonWire(chat_metadata);
+    if (!metadata?.integrity) {
         if (isChatTransitionInProgress()) {
             console.debug('[ChatWrite] Patch dropped: chat transition in progress.');
             return false;
@@ -14375,7 +14359,7 @@ async function patchChatMessagesInternal(operations, retryCount = 0) {
     /** @type {ReturnType<typeof resolveChatStateTarget> | null} */
     let target = null;
     try {
-        target = resolveChatStateTarget();
+        target = context?.target ?? resolveChatStateTarget();
         const snapshotKey = target ? getChatMessageSnapshotKey(target) : null;
         const previousMessages = snapshotKey ? chatMessageSnapshotCache.get(snapshotKey) : null;
         const guardedOperations = attachChatMessagePatchTests(previousMessages, normalizedOperations);
@@ -14402,13 +14386,9 @@ async function patchChatMessagesInternal(operations, retryCount = 0) {
             }
         }
 
-        if (selected_group) {
-            const group = groups.find(x => x.id == selected_group);
-            const groupChatId = group?.chat_id;
-            if (!groupChatId) {
-                return false;
-            }
-
+        if (target?.is_group) {
+            const groupChatId = target.id;
+            refreshSnapshotIntegrityFromActiveLive(target, metadata);
             const response = await fetch('/api/chats/group/patch', {
                 method: 'POST',
                 cache: 'no-cache',
@@ -14416,27 +14396,27 @@ async function patchChatMessagesInternal(operations, retryCount = 0) {
                 body: JSON.stringify({
                     id: groupChatId,
                     operations: guardedOperations,
-                    chat_metadata: { ...chat_metadata },
-                    integrity: chat_metadata?.integrity,
+                    chat_metadata: { ...metadata },
+                    integrity: metadata.integrity,
                     luker_generation_id: getLastLukerGenerationIdForApi(),
                 }),
             });
 
             if (response.ok) {
                 const payload = await response.json().catch(() => null);
-                applyIntegrityFromWritePayload(payload);
+                applyIntegrityFromWritePayloadToTarget(payload, target, metadata);
                 // Snapshot already committed optimistically before the fetch.
                 return true;
             }
-            // Any 409 surfaces via resolveChatWriteConflict; returning false lets
+            // Any 409 surfaces via resolveChatWriteConflictForTarget; returning false lets
             // the caller's saveChatConditional fallback do a full /api/chats/save.
             // No rebuild-and-retry: full save is bulletproof and avoids the
             // "diff itself was wrong" failure mode.
-            await resolveChatWriteConflict(response, retryCount, {
+            await resolveChatWriteConflictForTarget(response, target, metadata, retryCount, {
                 endpoint: 'chats/group/patch',
                 opSummary: summarizeJsonPatchOperations(guardedOperations),
-                sentIntegrity: chat_metadata?.integrity,
-            }, target);
+                sentIntegrity: metadata.integrity,
+            });
             return false;
         }
 
@@ -14457,25 +14437,25 @@ async function patchChatMessagesInternal(operations, retryCount = 0) {
                 file_name: fileName,
                 operations: guardedOperations,
                 avatar_url: avatar,
-                chat_metadata: { ...chat_metadata },
-                integrity: chat_metadata?.integrity,
+                chat_metadata: { ...metadata },
+                integrity: metadata.integrity,
                 luker_generation_id: getLastLukerGenerationIdForApi(),
             }),
         });
 
         if (response.ok) {
             const payload = await response.json().catch(() => null);
-            applyIntegrityFromWritePayload(payload);
+            applyIntegrityFromWritePayloadToTarget(payload, target, metadata);
             // Snapshot already committed optimistically before the fetch.
             return true;
         }
         // See group-branch comment: full-save fallback via the caller covers all
-        // 409 cases; resolveChatWriteConflict handles toast/event/snapshot.
-        await resolveChatWriteConflict(response, retryCount, {
+        // 409 cases; resolveChatWriteConflictForTarget handles toast/event/snapshot.
+        await resolveChatWriteConflictForTarget(response, target, metadata, retryCount, {
             endpoint: 'chats/patch',
             opSummary: summarizeJsonPatchOperations(guardedOperations),
-            sentIntegrity: chat_metadata?.integrity,
-        }, target);
+            sentIntegrity: metadata.integrity,
+        });
         return false;
     } catch (error) {
         console.warn('Incremental chat patch failed', error);
@@ -14491,7 +14471,9 @@ async function patchChatMessagesInternal(operations, retryCount = 0) {
 
 export async function patchChatMessages(operations, retryCount = 0) {
     const queuedOperations = cloneAsJsonWire(operations) ?? operations;
-    return await runSerializedChatWrite(() => patchChatMessagesInternal(queuedOperations, retryCount));
+    const context = selected_group ? buildActiveChatSaveContext() : null;
+    if (selected_group && !context) return false;
+    return await runSerializedChatWrite(() => patchChatMessagesInternal(queuedOperations, retryCount, context));
 }
 
 function buildActiveChatSaveContext({ withMetadata = undefined, chatName = undefined, mesId = undefined, withMessages = true } = {}) {
@@ -14604,7 +14586,7 @@ async function saveChatMetadataInternal(withMetadata = undefined, retryCount = 0
     // Data-loss guard: refuse to save when chat is not fully loaded (see
     // saveChatInternal for full rationale). A write with no resolvable save
     // target has nothing to overwrite, so it is dropped silently.
-    if (!chat_metadata?.integrity) {
+    if (!(context?.kind === 'group' ? context.metadataSnapshot?.integrity : chat_metadata?.integrity)) {
         if (isChatTransitionInProgress()) {
             console.debug('[ChatWrite] Metadata save dropped: chat transition in progress.');
             return false;
@@ -14732,9 +14714,24 @@ async function saveChatMetadataInternal(withMetadata = undefined, retryCount = 0
     }
 }
 
+async function saveChatMetadataForContext(withMetadata, retryCount, context) {
+    if (context?.kind !== 'group') {
+        return await saveChatMetadataInternal(withMetadata, retryCount, context);
+    }
+    // A metadata-only acknowledgement cannot establish unsaved messages.
+    // An acknowledged empty message array is a valid existing conversation.
+    if (Array.isArray(getChatMessageSnapshot(context.target))) {
+        const saved = await saveChatMetadataInternal(withMetadata, retryCount, context);
+        if (saved) return true;
+    }
+    return await saveGroupChat(context.groupId, true, false, 0, { ...context, skipSerialization: true });
+}
+
 export async function saveChatMetadata(withMetadata = undefined, retryCount = 0) {
     const metadataPatch = cloneAsJsonWire(withMetadata) ?? withMetadata;
-    return await runSerializedChatWrite(() => saveChatMetadataInternal(metadataPatch, retryCount));
+    const context = selected_group ? buildActiveChatSaveContext({ withMetadata: metadataPatch }) : null;
+    if (selected_group && !context) return false;
+    return await runSerializedChatWrite(() => saveChatMetadataForContext(metadataPatch, retryCount, context));
 }
 
 /**
@@ -15197,9 +15194,6 @@ export async function getChat() {
             chat_metadata = {};
         }
         chat.forEach(ensureMessageMediaIsArray);
-        chatServerState.nextOlderIndex = 0;
-        chatServerState.totalMessages = chat.length;
-        chatServerState.hasMore = false;
 
         if (!chat_metadata.integrity) {
             chat_metadata.integrity = uuidv4();
@@ -15235,10 +15229,6 @@ async function getChatResult() {
         }
         // Make sure the chat appears on the server
         await saveChatConditional();
-    }
-    chatServerState.totalMessages = Math.max(chatServerState.totalMessages, chat.length);
-    if (!chatServerState.hasMore) {
-        chatServerState.nextOlderIndex = 0;
     }
 
     // Op-log scan first_mes BEFORE printMessages renders it. messageFormatting
@@ -15357,9 +15347,6 @@ export async function openCharacterChat(file_name) {
     characters[chidSnapshot].chat = file_name;
     beginChatTransition();
     chat_metadata = {};
-    chatServerState.nextOlderIndex = 0;
-    chatServerState.totalMessages = 0;
-    chatServerState.hasMore = false;
     await getChat();
     $('#selected_chat_pole').val(file_name);
     await updateRemoteChatName(chidSnapshot, file_name);
@@ -15791,7 +15778,7 @@ async function fetchBootstrapSnapshot() {
         const response = await fetch('/api/bootstrap', {
             method: 'POST',
             headers: getRequestHeaders(),
-            body: JSON.stringify({}),
+            body: JSON.stringify({ includeSettings: false }),
             cache: 'no-cache',
         });
 
@@ -15825,7 +15812,7 @@ async function warmPreloadFullSettings() {
 
     fullSettingsLoadPromise = (async () => {
         try {
-            const data = await fetchSettingsPayload('/api/settings/get', { silent: true });
+            const data = await loadPresetResources({ complete: true });
             hydrateFullSettingsPresetData(data);
             return true;
         } catch (error) {
@@ -15845,8 +15832,7 @@ export async function ensureFullSettingsLoaded() {
     if (fullSettingsLoaded) {
         return true;
     }
-
-    return await warmPreloadFullSettings();
+    return warmPreloadFullSettings();
 }
 
 export async function getSettings(options = {}) {
@@ -17668,7 +17654,9 @@ export async function saveMetadata(options = {}) {
     const withMetadata = (options && typeof options === 'object') ? options.withMetadata : undefined;
 
     try {
-        const saveContext = buildActiveChatSaveContext({ withMetadata, withMessages: false });
+        // Group metadata failures use the complete writer. Preserve its messages
+        // before an awaited request can outlive the active target.
+        const saveContext = buildActiveChatSaveContext({ withMetadata, withMessages: Boolean(selected_group) });
         if (!saveContext) {
             return;
         }
@@ -17677,13 +17665,9 @@ export async function saveMetadata(options = {}) {
             activeChatSaveContext = saveContext;
             isChatSaving = true;
 
-            const saved = await saveChatMetadataInternal(withMetadata, 0, saveContext);
-            if (!saved) {
-                if (saveContext.kind === 'group') {
-                    await saveGroupChat(saveContext.groupId, true, false, 0, { ...saveContext, skipSerialization: true });
-                } else {
-                    await saveChatInternal({ withMetadata, _context: saveContext });
-                }
+            const saved = await saveChatMetadataForContext(withMetadata, 0, saveContext);
+            if (!saved && saveContext.kind !== 'group') {
+                await saveChatInternal({ withMetadata, _context: saveContext });
             }
 
             finishActiveChatSaveContext(saveContext);
@@ -18217,7 +18201,134 @@ export async function updateCharacterData(charId, patch, { persist = true, immed
  * @param {number|string} charId
  * @returns {Promise<void>}
  */
-export async function persistCharacterData(charId) {
+function escapeCharacterPointer(value) {
+    return String(value).replaceAll('~', '~0').replaceAll('/', '~1');
+}
+
+function characterSourceData(character) {
+    try {
+        const parsed = JSON.parse(character?.json_data || '{}');
+        return parsed?.data && typeof parsed.data === 'object' && !Array.isArray(parsed.data)
+            ? parsed.data
+            : parsed;
+    } catch {
+        return {};
+    }
+}
+
+function characterDataPatchOperations(character, nextData = character?.data || {}) {
+    const sourceData = characterSourceData(character);
+    const currentExtensions = nextData.extensions ?? {};
+    const sourceExtensions = sourceData?.extensions ?? {};
+    if (!lodash.isEqual(currentExtensions, sourceExtensions)) {
+        return null;
+    }
+
+    const operations = [];
+    for (const [key, value] of Object.entries(nextData)) {
+        if (key === 'extensions') continue;
+        if (!lodash.isEqual(value, sourceData?.[key])) {
+            operations.push({
+                op: 'add',
+                path: `/data/${escapeCharacterPointer(key)}`,
+                value,
+            });
+        }
+    }
+    return operations;
+}
+
+function characterDataFromForm(character, formData) {
+    const current = character?.data && typeof character.data === 'object' ? character.data : {};
+    const sourceData = characterSourceData(character);
+    const next = { ...current };
+    const text = (name) => {
+        const value = formData.get(name);
+        return value === null ? undefined : String(value);
+    };
+    const setText = (field, name = field) => {
+        const value = text(name);
+        if (value !== undefined && !(value === '' && sourceData?.[field] === undefined)) {
+            next[field] = value;
+        }
+    };
+
+    setText('name', 'ch_name');
+    for (const field of ['description', 'personality', 'scenario', 'first_mes', 'mes_example', 'creator_notes', 'system_prompt', 'post_history_instructions', 'creator', 'character_version']) {
+        setText(field);
+    }
+    const tags = text('tags');
+    if (tags !== undefined) {
+        next.tags = tags.split(',').map(tag => tag.trim()).filter(Boolean);
+    }
+
+    const extensions = { ...(current.extensions || {}) };
+    const talkativeness = text('talkativeness');
+    if (talkativeness !== undefined && Number(talkativeness) !== Number(extensions.talkativeness ?? 0.5)) {
+        extensions.talkativeness = Number(talkativeness);
+    }
+    const fav = text('fav');
+    if (fav !== undefined && (fav === 'true') !== (extensions.fav === true)) {
+        extensions.fav = fav === 'true';
+    }
+    const world = text('world');
+    if (world !== undefined && world !== String(extensions.world ?? '')) {
+        extensions.world = world;
+    }
+    const depthPrompt = text('depth_prompt_prompt');
+    const depth = text('depth_prompt_depth');
+    const role = text('depth_prompt_role');
+    const currentDepth = extensions.depth_prompt || {};
+    const nextDepth = {
+        ...currentDepth,
+        ...(depthPrompt !== undefined && depthPrompt !== String(currentDepth.prompt ?? '') ? { prompt: depthPrompt } : {}),
+        ...(depth !== undefined && Number(depth) !== Number(currentDepth.depth ?? 4) ? { depth: Number(depth) } : {}),
+        ...(role !== undefined && role !== String(currentDepth.role ?? 'system') ? { role } : {}),
+    };
+    if (!lodash.isEqual(nextDepth, currentDepth)) {
+        extensions.depth_prompt = nextDepth;
+    }
+    next.extensions = extensions;
+    return next;
+}
+
+export async function persistCharacterData(charId, { data: requestedData } = {}) {
+    const character = characters[charId];
+    if (!character) {
+        throw new Error(`persistCharacterData: no character at index ${charId}`);
+    }
+    const nextData = requestedData || character.data || {};
+    const operations = characterDataPatchOperations(character, nextData);
+    if (operations === null) {
+        return persistCharacterDataLegacy(charId);
+    }
+    if (operations.length === 0) {
+        return;
+    }
+
+    const response = await fetch('/api/characters/patch', {
+        method: 'POST',
+        headers: getRequestHeaders(),
+        body: JSON.stringify({
+            avatar_url: String(character.avatar || ''),
+            operations,
+        }),
+        cache: 'no-cache',
+    });
+    if (!response.ok) {
+        const detail = await response.text().catch(() => '');
+        throw new Error(`persistCharacterData: HTTP ${response.status}${detail ? ` ${detail}` : ''}`);
+    }
+    try {
+        const source = JSON.parse(character.json_data || '{}');
+        character.json_data = JSON.stringify(applyJsonPatch(source, operations).newDocument);
+    } catch (error) {
+        console.warn('persistCharacterData: could not update the local source snapshot', error);
+    }
+    await invalidateCharacterResource(character.avatar);
+}
+
+async function persistCharacterDataLegacy(charId) {
     const character = characters[charId];
     if (!character) {
         throw new Error(`persistCharacterData: no character at index ${charId}`);
@@ -18425,13 +18536,6 @@ export async function createOrEditCharacter(e) {
         }
     } else {
         try {
-            let url = '/api/characters/edit';
-
-            if (crop_data != undefined) {
-                url += `?crop=${encodeURIComponent(JSON.stringify(crop_data))}`;
-            }
-
-            formData.delete('alternate_greetings');
             const chid = $('.open_alternate_greetings').data('chid');
             if (characters[chid] && Array.isArray(characters[chid]?.data?.alternate_greetings)) {
                 for (const value of characters[chid].data.alternate_greetings) {
@@ -18439,21 +18543,43 @@ export async function createOrEditCharacter(e) {
                 }
             }
 
-            const editingExtensions = characters[this_chid]?.data?.extensions;
-            if (editingExtensions && typeof editingExtensions === 'object') {
-                formData.append('extensions', JSON.stringify(editingExtensions));
-            }
+            const nextData = characterDataFromForm(characters[this_chid], formData);
+            const canPatch = !(rawFile instanceof File && rawFile.size > 0)
+                && crop_data === undefined
+                && characterDataPatchOperations(characters[this_chid], nextData) !== null;
 
-            const fetchResult = await fetch(url, {
-                method: 'POST',
-                headers: headers,
-                body: formData,
-                cache: 'no-cache',
-            });
+            if (canPatch) {
+                await persistCharacterData(this_chid, { data: nextData });
+            } else {
+                let url = '/api/characters/edit';
 
-            if (!fetchResult.ok) {
-                const detail = await fetchResult.text().catch(() => '');
-                throw new Error(detail ? `${fetchResult.status} ${detail}` : `${fetchResult.status}`);
+                if (crop_data != undefined) {
+                    url += `?crop=${encodeURIComponent(JSON.stringify(crop_data))}`;
+                }
+
+                formData.delete('alternate_greetings');
+                if (characters[chid] && Array.isArray(characters[chid]?.data?.alternate_greetings)) {
+                    for (const value of characters[chid].data.alternate_greetings) {
+                        formData.append('alternate_greetings', value);
+                    }
+                }
+
+                const editingExtensions = characters[this_chid]?.data?.extensions;
+                if (editingExtensions && typeof editingExtensions === 'object') {
+                    formData.append('extensions', JSON.stringify(editingExtensions));
+                }
+
+                const fetchResult = await fetch(url, {
+                    method: 'POST',
+                    headers,
+                    body: formData,
+                    cache: 'no-cache',
+                });
+
+                if (!fetchResult.ok) {
+                    const detail = await fetchResult.text().catch(() => '');
+                    throw new Error(detail ? `${fetchResult.status} ${detail}` : `${fetchResult.status}`);
+                }
             }
 
             // Keep the live chat pointer across the refresh: the edit form
@@ -19339,7 +19465,7 @@ export async function renameGroupOrCharacterChat({ characterId, groupId, oldFile
             await reloadCurrentChat();
         }
 
-        const eventData = { avatarId: body.avatar_url, groupId, oldFileName: body.original_file, newFileName: body.renamed_file };
+        const eventData = { avatarId: body.avatar_url, groupId, oldFileName: body.original_file, newFileName: `${newFileName}.jsonl` };
         await eventSource.emit(event_types.CHAT_RENAMED, eventData);
     } catch {
         await delay(500);

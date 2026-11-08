@@ -168,6 +168,19 @@ securityOverride: false
 - `disableCsrfProtection`: Disables CSRF protection (not recommended)
 - `securityOverride`: Security override switch (for debugging only)
 
+### Sync Private Addresses {#sync-private-addresses}
+
+```yaml
+sync:
+  allowPrivateAddressesForUsers: false
+```
+
+By default, non-admin accounts on multi-user installations cannot make outbound LAN or S3 sync connections to private, loopback or link-local destinations. Administrators and single-user mode with user accounts disabled are exempt.
+
+Setting `allowPrivateAddressesForUsers: true` permits those users to reach private destinations through sync. Enable it only for users who should have access to the server's private network. It does not enable LAN listening or replace firewall, whitelist or authentication settings.
+
+See [Sync](/improvements/sync), [LAN setup](/improvements/lan-sync) and [S3 setup](/improvements/s3-sync).
+
 ## Backup and Storage
 
 ```yaml
@@ -203,12 +216,12 @@ Luker can persist user data through one of several backends. The `mode` key choo
 
 - `fs` (default): one file per chat / preset / world / etc. under `<dataRoot>/<handle>/`. Recommended for single-user installs and the easiest backend to inspect by hand.
 - `sqlite`: one self-contained `luker-storage.sqlite` file per user under `<dataRoot>/<handle>/`. Suits installs that want a single transactional file without operating a separate database service.
-- `mysql`: one shared MySQL 8.0+ database; all users live in the same schema, keyed by a `handle` column. Suitable for multi-user deployments that already run MySQL.
+- `mysql`: one shared MySQL 8.0+ database. Suitable for multi-user deployments that already run MySQL.
 - `postgres`: one shared PostgreSQL 14+ database; same shape as MySQL but using PostgreSQL.
 
-Switching backends requires running the migration tool first; the admin panel exposes a Storage Backend tab that walks through `fs ↔ sqlite` migration with a permanent backup taken at `<dataRoot>/_storage-migrations/`. Switching to or from `mysql` / `postgres` is supported by setting `storage.mode` in `config.yaml` and restarting the server; the migration tool itself currently only routes between `fs` and `sqlite`, so moving an existing install to MySQL or PostgreSQL means either starting fresh or staging through SQLite.
+Switching backends requires running the migration tool first. In the admin panel's Storage Backend tab, pick the target backend; Luker migrates every user, then switches the storage engine and writes `mode` to `config.yaml`. Data is read-only during the migration. If one user fails, that user's snapshot stays under `<dataRoot>/_storage-migrations/` and re-running resumes the migration.
 
-A headless equivalent of the admin panel migration is available at `node scripts/storage-migrate.js --from fs --to sqlite` (and the reverse).
+The command-line script accepts any source and target pair; pass the connection string for the engines involved, for example `node scripts/storage-migrate.js --from fs --to mysql --mysql-url <url>`.
 
 The desktop app supports only the `fs`, `mysql`, and `postgres` backends.
 

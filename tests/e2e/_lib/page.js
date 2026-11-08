@@ -18,10 +18,13 @@
 // invariant (rate-limit, queueing, persistence under load) rather than the
 // UI. They are NOT the default and must be named explicitly.
 
+import { expect } from '@playwright/test';
+import { accountWindow, openUserManagement, pageHead } from './account-window.js';
+
 /**
  * Navigate to baseURL and wait for ST to leave the preloader. Clicks the
- * user-select gate if present (multi-user dev configs). Also kicks the
- * connect handshake so #send_but un-hides.
+ * user-select gate if present and completes fresh-user onboarding through
+ * its visible form. Connection setup belongs to explicit DOM actions.
  */
 export async function awaitMainUI(page, baseURL) {
     if (baseURL) await page.goto(baseURL);
@@ -31,24 +34,25 @@ export async function awaitMainUI(page, baseURL) {
         await gate.waitFor({ state: 'visible', timeout: 2000 });
         await gate.click();
     } catch { /* auto-login path */ }
-    await page.waitForFunction('document.getElementById("preloader") === null', { timeout: 60_000 });
-    await page.waitForFunction(() => !!window.Luker?.getContext, { timeout: 30_000 });
-    // Click the Connect button if present (canonical handshake entry).
-    await page.evaluate(async () => {
-        const btn = document.querySelector('#api_button_openai');
-        if (btn) { btn.click(); return; }
-        try {
-            const mod = await import('/scripts/openai.js');
-            if (typeof mod.startStatusLoading === 'function') mod.startStatusLoading();
-        } catch { /* no-op */ }
-    });
-    // Wait up to 15s for #send_but to un-hide (CUSTOM source flips
-    // online_status immediately so this is usually instant).
-    await page.locator('#send_but:not(.displayNone)').waitFor({ state: 'visible', timeout: 15_000 }).catch(() => {});
+    await page.waitForFunction(() => document.getElementById('preloader') === null && !!window.Luker?.getContext
+        && performance.getEntriesByName('[init] complete').length > 0, null, { timeout: 60_000 });
+    await completeOnboarding(page);
 }
 
 export async function reloadAndAwait(page, baseURL) {
     return awaitMainUI(page, baseURL);
+}
+
+/**
+ * Save an open welcome form and await its actual settings persistence.
+ */
+export async function completeOnboarding(page) {
+    const welcome = page.locator('dialog.popup[open]', { has: page.locator('.onboarding') });
+    if (!(await welcome.isVisible())) return;
+    const saved = page.waitForResponse(response => new URL(response.url()).pathname === '/api/settings/save' && response.request().method() === 'POST');
+    await welcome.locator('.popup-button-ok').click();
+    await welcome.waitFor({ state: 'detached', timeout: 10_000 });
+    if (!(await saved).ok()) throw new Error('Onboarding settings were not saved');
 }
 
 export async function openExtensionsDrawer(page) {
@@ -80,11 +84,8 @@ export async function closeExtensionsDrawer(page) {
     if (!isOpen) return;
     // Use the .drawer-toggle handler (doNavbarIconClick) so the icon
     // state stays in sync with the drawer state.
-    await page.evaluate(() => {
-        const toggle = document.querySelector('#extensions-settings-button .drawer-toggle');
-        toggle?.click();
-    });
-    await block.waitFor({ state: 'hidden', timeout: 5000 }).catch(() => {});
+    await page.locator('#extensions-settings-button .drawer-toggle').click();
+    await block.waitFor({ state: 'hidden', timeout: 5000 });
 }
 
 /**
@@ -95,21 +96,9 @@ export async function closeExtensionsDrawer(page) {
  * them closed before clicking the chat composer.
  */
 export async function closeAnyOpenTopSettingsDrawer(page) {
-    const hadOpen = await page.evaluate(() => {
-        const opens = document.querySelectorAll('#top-settings-holder .drawer-content.openDrawer:not(.pinnedOpen)');
-        if (!opens.length) return false;
-        for (const drawer of opens) {
-            const wrapper = drawer.closest('.drawer');
-            const toggle = wrapper?.querySelector(':scope > .drawer-toggle');
-            toggle?.click();
-        }
-        return true;
-    });
-    if (hadOpen) {
-        // Wait briefly for the close animation/state to settle.
-        await page.waitForFunction(() => {
-            return document.querySelectorAll('#top-settings-holder .drawer-content.openDrawer:not(.pinnedOpen)').length === 0;
-        }, { timeout: 3000 }).catch(() => {});
+    const drawers = page.locator('#top-settings-holder .drawer').filter({ has: page.locator('> .drawer-content.openDrawer:not(.pinnedOpen)') });
+    while (await drawers.count()) {
+        await drawers.first().locator('> .drawer-toggle').click();
     }
 }
 
@@ -165,17 +154,11 @@ export async function selectCharacterByName(page, name) {
     // If a prior character was already selected, the right drawer is
     // showing the character-edit panel rather than the list. Click the
     // "Characters" sub-panel button so #rm_print_characters_block becomes
-    // visible again. Use a JS click so a toast or transient overlay
-    // can't intercept the gesture (force:true on the locator click still
-    // dispatches via pointer coordinates and is blocked by overlays in
-    // some layouts).
+    // visible again.
     const listVisible = await page.locator('#rm_print_characters_block:visible').count().catch(() => 0);
     if (!listVisible) {
-        await page.evaluate(() => {
-            const btn = document.querySelector('#rm_button_characters');
-            if (btn) btn.click();
-        });
-        await page.locator('#rm_print_characters_block').waitFor({ state: 'visible', timeout: 10_000 }).catch(() => {});
+        await page.locator('#rm_button_characters').click();
+        await page.locator('#rm_print_characters_block').waitFor({ state: 'visible', timeout: 10_000 });
     }
 
     const charBlock = page.locator('#rm_print_characters_block');
@@ -198,10 +181,32 @@ export async function selectCharacterByName(page, name) {
     await closeRightNavDrawer(page);
 }
 
+/** Open the top bar drawer whose `.drawer` wrapper has id `drawerId` if it's closed. */
+export async function openTopDrawer(page, drawerId) {
+    const content = page.locator(`#${drawerId} > .drawer-content`);
+    if (await content.evaluate(el => el.classList.contains('closedDrawer'))) {
+        await page.locator(`#${drawerId} > .drawer-toggle`).click();
+    }
+    await content.waitFor({ state: 'visible', timeout: 5000 });
+}
+
+/** Close the top bar drawer whose `.drawer` wrapper has id `drawerId` if it's open. */
+export async function closeTopDrawer(page, drawerId) {
+    const content = page.locator(`#${drawerId} > .drawer-content`);
+    if (!(await content.evaluate(el => el.classList.contains('closedDrawer')))) {
+        await page.locator(`#${drawerId} > .drawer-toggle`).click();
+    }
+    await content.waitFor({ state: 'hidden', timeout: 5000 });
+}
+
+/** Open the User Settings drawer if it's closed. */
+export async function openUserSettingsDrawer(page) {
+    await openTopDrawer(page, 'user-settings-button');
+}
+
 /**
  * Close the right nav (character management) drawer if it's open. The
- * #rightNavDrawerIcon sits behind the HotSwap row in some layouts; we
- * dispatch the click via JS to bypass the overlay reliably.
+ * Uses the visible drawer toggle.
  */
 export async function closeRightNavDrawer(page) {
     const isOpen = await page.evaluate(() => {
@@ -209,14 +214,7 @@ export async function closeRightNavDrawer(page) {
         return i && i.classList.contains('openIcon');
     });
     if (isOpen) {
-        // jQuery click() is what ST's drawer handlers listen for; dispatch
-        // a real MouseEvent on the icon's drawer-toggle ancestor so the
-        // .on('click', ...) bound handler runs.
-        await page.evaluate(() => {
-            const i = document.querySelector('#rightNavDrawerIcon');
-            const toggle = i?.closest('.drawer-toggle') || i;
-            toggle?.click();
-        });
+        await page.locator('#rightNavHolder > .drawer-toggle').click();
         await page.waitForFunction(() => {
             const i = document.querySelector('#rightNavDrawerIcon');
             return i && i.classList.contains('closedIcon');
@@ -406,19 +404,10 @@ export async function editMessageViaUI(page, mesid, newText) {
         await editArea.press('Delete');
         await editArea.type(newText);
     }
-    // Listen for MESSAGE_EDITED before clicking confirm so we don't race
-    // the save → re-render cycle.
-    const editPromise = page.evaluate(() => new Promise((resolve, reject) => {
-        const ctx = window.Luker.getContext();
-        const t = setTimeout(() => reject(new Error('edit timeout')), 15_000);
-        const off = ctx.eventSource.on(ctx.eventTypes.MESSAGE_EDITED, (id) => {
-            clearTimeout(t);
-            try { ctx.eventSource.removeListener(ctx.eventTypes.MESSAGE_EDITED, off); } catch { /* ignore */ }
-            resolve(id);
-        });
-    }));
+    const saved = page.waitForResponse(response => response.request().method() === 'POST' && /\/api\/(chats\/(save|patch)|chats\/group\/(save|patch))$/.test(new URL(response.url()).pathname));
     await mes.locator('.mes_edit_done').first().click();
-    await editPromise;
+    if (!(await saved).ok()) throw new Error('Edited chat was not saved');
+    await mes.locator('.edit_textarea').waitFor({ state: 'detached' });
 }
 
 /**
@@ -505,11 +494,6 @@ export async function openOptionsAndClick(page, optionId) {
     const item = page.locator(`#${optionId}:visible`).first();
     await item.waitFor({ state: 'visible', timeout: 5000 });
     await item.click();
-    // Close the dropdown if it's still showing.
-    await page.evaluate(() => {
-        const opts = document.querySelector('#options');
-        if (opts && opts.style.display !== 'none') opts.style.display = 'none';
-    });
 }
 
 /**
@@ -830,86 +814,49 @@ export async function installMinimalDirectorProfile(page, {
 }
 
 /**
- * Open the Admin Panel popup. Assumes the current user is admin (default
- * user in single-user mode is auto-admin; in multi-user mode the caller
- * must have logged in as an admin). Idempotent w.r.t. the User Settings
- * drawer state — checks the closedIcon class before toggling.
+ * Open user management in the Account window (User Settings → Admin Panel).
+ * Assumes the current user is admin (default user in single-user mode is
+ * auto-admin; in multi-user mode the caller must have logged in as an
+ * admin). Resolves once the user list shows.
  */
 export async function openAdminPanel(page) {
-    const settingsDrawer = page.locator('#user-settings-button');
-    // 10s covers cold-start settings-drawer mount on CI.
-    await settingsDrawer.waitFor({ state: 'visible', timeout: 10_000 });
-    const drawerClosed = await page.locator('#user-settings-button .drawer-icon.closedIcon').count().then(n => n > 0);
-    if (drawerClosed) {
-        await page.locator('#user-settings-button .drawer-toggle').click();
-        // 5s: drawer open animation is short but CSS transitions vary.
-        await page.waitForFunction(() => {
-            const el = document.getElementById('user-settings-block');
-            return el && !el.classList.contains('closedDrawer');
-        }, { timeout: 5_000 });
-    }
-    const adminButton = page.locator('#admin_button');
-    await adminButton.waitFor({ state: 'visible', timeout: 10_000 });
-    await adminButton.click();
-    // 10s covers cold-start admin popup mount on CI.
-    await page.locator('button[data-target-tab="usersList"]').last().waitFor({ state: 'visible', timeout: 10_000 });
+    await openUserManagement(page);
 }
 
 /**
- * Create a new user via the real Admin Panel New User form. Follows the
- * exact click path a real admin would take:
+ * Create a new user via the real New User page of user management.
+ * Follows the exact click path a real admin would take:
  *
- *   1. Open Admin Panel (drawer → #admin_button).
- *   2. Click "New User" nav tab (`data-target-tab="registerNewUserBlock"`).
- *   3. Fill display name → slugify handler auto-populates the handle;
- *      overwrite it with the desired handle explicitly (in case slugify
- *      picks a different one).
+ *   1. Open user management (drawer → #admin_button).
+ *   2. Click "New User".
+ *   3. Fill display name → the page suggests a handle; overwrite it with
+ *      the desired handle explicitly (typing a handle stops the
+ *      suggestion).
  *   4. Fill password + confirm password.
- *   5. Submit the form.
- *   6. Wait until the user appears in the Manage Users list (proves the
- *      create round-tripped through the /api/users/create endpoint and
- *      the list re-rendered from /api/users/get).
+ *   5. Click Create.
+ *   6. Wait until the user appears in the user list (proves the create
+ *      round-tripped through /api/users/create and the list re-rendered
+ *      from /api/users/get).
  *
  * Requires `enableUserAccounts:true` at server boot; on single-user mode
- * the admin popup still opens but the create form would create a user
- * that can never actually log in.
+ * the page still opens but the created user can never actually log in.
  *
  * @param {import('@playwright/test').Page} page
  * @param {{ handle: string, name: string, password?: string }} spec
  */
 export async function createUserViaAdminUI(page, { handle, name, password = '' }) {
-    await openAdminPanel(page);
-    const popup = page.locator('dialog.popup[open]').last();
-    // Click the New User tab.
-    await popup.locator('button[data-target-tab="registerNewUserBlock"]').click();
-    const form = popup.locator('.userCreateForm').last();
-    await form.waitFor({ state: 'visible', timeout: 5_000 });
-    // Fill name; the input handler auto-slugifies into the handle field.
-    await form.locator('.createUserDisplayName').fill(name);
-    // Overwrite the handle explicitly (slugify roundtrip has a tiny delay
-    // and might not match if the display name contains chars slugify
-    // drops).
-    await form.locator('.createUserHandle').fill(handle);
+    await openUserManagement(page);
+    const win = accountWindow(page);
+    await win.locator('[data-act="adm-push"][data-view="adminNew"]').click();
+    await expect(pageHead(page)).toHaveAttribute('data-view', 'adminNew');
+    await win.locator('[data-model="top.form.name"]').fill(name);
+    await win.locator('[data-model="top.form.handle"]').fill(handle);
     if (password) {
-        await form.locator('.createUserPassword').fill(password);
-        await form.locator('.createUserConfirmPassword').fill(password);
+        await win.locator('[data-model="top.form.password"]').fill(password);
+        await win.locator('[data-model="top.form.confirm"]').fill(password);
     }
-    await form.locator('.newUserRegisterFinalizeButton').click();
-    // Success drops back to the Manage Users tab (see form submit handler
-    // in public/scripts/user.js). Wait for the new user row to render.
-    const usersList = popup.locator('.navTab.usersList');
-    await usersList.waitFor({ state: 'visible', timeout: 10_000 });
-    // The .userAccount block's small.userHandle carries the handle text
-    // after renderUsers() re-fetches /api/users/get and re-renders. Poll
-    // via a JS-level check because filter({has:}) has been unreliable
-    // here — the DOM has alice but the has-filter times out; suspect
-    // an initial `&nbsp;`-only render is being observed and cached.
-    await page.waitForFunction((h) => {
-        const rows = document.querySelectorAll('.userAccount .userHandle');
-        for (const r of rows) {
-            if ((r.textContent || '').trim() === h) return true;
-        }
-        return false;
-    }, handle, { timeout: 15_000 });
+    await win.locator('[data-act="adm-create"]').click();
+    // Success returns to the user list.
+    await expect(pageHead(page)).toHaveAttribute('data-view', 'users', { timeout: 10_000 });
+    await expect(win.locator(`[data-act="adm-user"][data-handle="${handle}"]`).first()).toBeVisible({ timeout: 15_000 });
 }
-

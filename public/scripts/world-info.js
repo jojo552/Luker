@@ -1,6 +1,7 @@
 import { Fuse } from '../lib.js';
 
 import { saveSettings, substituteParams, getRequestHeaders, chat_metadata, this_chid, characters, saveCharacterDebounced, menu_type, eventSource, event_types, getExtensionPromptByName, saveMetadata, getCurrentChatId, extension_prompt_roles, create_save, name1, buildObjectPatchOperationsAsync, requestAsyncDiffForNextSettingsSave, getOneCharacter, select_selected_character } from '../script.js';
+import { readWorldInfoDocument } from './named-resource-read.js';
 import { areLookupNamesEqual, download, debounce, findCanonicalIndexInList, findCanonicalNameInList, initScrollHeight, resetScrollHeight, parseJsonFile, extractDataFromPng, getFileBuffer, getCharaFilename, escapeRegex, PAGINATION_TEMPLATE, navigation_option, waitUntilCondition, isTrueBoolean, setValueByPath, flashHighlight, select2ModifyOptions, getSelect2OptionId, dynamicSelect2DataViaAjax, highlightRegex, select2ChoiceClickSubscribe, isFalseBoolean, getSanitizedFilename, checkOverwriteExistingData, getStringHash, parseStringArray, cancelDebounce, findChar, onlyUnique, equalsIgnoreCaseAndAccents, uuidv4, normalizeArray, getUniqueName, logSlashCommandWarn, addLongPressEvent, escapeHtml, setInfoBlock, clearInfoBlock } from './utils.js';
 import { extension_settings, getContext, writeExtensionField } from './extensions.js';
 import { NOTE_MODULE_NAME, metadata_keys, shouldWIAddPrompt } from './authors-note.js';
@@ -32,6 +33,7 @@ import { accountStorage } from './util/AccountStorage.js';
 import { getOrCreatePersonaDescriptor, setPersonaDescription, user_avatar } from './personas.js';
 import { initActionableSingleSelect, refreshOpenDropdown } from './select2-actionable-single.js';
 import { buildBulkDeleteConfirmBody } from './select2-multiselect.js';
+import { downloadTextFilesAsZip } from './zip-export.js';
 import { showUndoToast } from './undo-toast.js';
 
 function buildWorldInfoDragHelper(item) {
@@ -1902,8 +1904,9 @@ export function setWorldInfoSettings(settings, data) {
     }
 
     world_names.forEach((item, i) => {
-        $('#world_info').append(`<option value='${i}'${selected_world_info.includes(item) ? ' selected' : ''}>${item}</option>`);
-        $('#world_editor_select').append(`<option value='${i}'>${item}</option>`);
+        const selected = selected_world_info.includes(item);
+        $('#world_info').append(new Option(item, String(i), selected, selected));
+        $('#world_editor_select').append(new Option(item, String(i)));
     });
     _suppressLegacySelectSync = false;
 
@@ -3020,26 +3023,24 @@ export async function loadWorldInfoBatch(names) {
             pendingNames.map((name) => [name, getWorldInfoRequestGeneration(name)]),
         );
         const batchPromise = (async () => {
-            const response = await fetch('/api/worldinfo/get-batch', {
-                method: 'POST',
-                headers: getRequestHeaders(),
-                body: JSON.stringify({ names: pendingNames }),
-                cache: 'no-cache',
-            });
-
-            if (!response.ok) {
-                return new Map(pendingNames.map((name) => [name, null]));
-            }
-
-            const payload = await response.json();
             const batchResults = new Map();
-            for (const name of pendingNames) {
-                const data = isPlainObject(payload?.data?.[name]) ? payload.data[name] : null;
+            await Promise.all(pendingNames.map(async (name) => {
+                let data = null;
+                try {
+                    data = await readWorldInfoDocument(name);
+                } catch (error) {
+                    if (error?.code === 'http_error' && error.status === 404) {
+                        data = { entries: {} };
+                    } else {
+                        console.warn(`Failed to load World Info ${name}`, error);
+                        toastr.error(t`Failed to load World Info ${name}.`, t`Error`, { preventDuplicates: true });
+                    }
+                }
                 if (data && requestGenerationByName.get(name) === getWorldInfoRequestGeneration(name)) {
                     cacheWorldInfoData(name, data);
                 }
                 batchResults.set(name, data);
-            }
+            }));
             return batchResults;
         })();
 
@@ -11490,6 +11491,41 @@ export function initWorldInfo() {
             await deleteWorldInfoWithUndo(worldNames);
         },
         bulkDeleteButtonTitle: t`Delete`,
+        onBulkExport: async (items) => {
+            const worldNames = Array.from(new Set(items.map((item) => resolveWorldInfoName(item.text)).filter(Boolean)));
+            if (!worldNames.length) {
+                return;
+            }
+
+            try {
+                const dataByName = await loadWorldInfoBatch(worldNames);
+                const files = [];
+                const missing = [];
+
+                for (const worldName of worldNames) {
+                    const worldData = dataByName.get(worldName);
+                    if (!worldData) {
+                        missing.push(worldName);
+                        continue;
+                    }
+
+                    files.push({
+                        name: `${worldName}.json`,
+                        content: JSON.stringify(worldData),
+                    });
+                }
+
+                if (missing.length) {
+                    throw new Error(`World/Lorebook data not found: ${missing.join(', ')}`);
+                }
+
+                await downloadTextFilesAsZip(files, 'worldbooks.zip');
+            } catch (error) {
+                console.error('Failed to export World/Lorebooks', error);
+                toastr.error(String(error?.message || error), t`Failed to export World/Lorebooks`);
+            }
+        },
+        bulkExportButtonTitle: t`Export`,
         selectAllTitle: t`Select all`,
         selectedLabel: t`Selected`,
     });

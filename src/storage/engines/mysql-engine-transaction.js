@@ -1,6 +1,9 @@
-import { NotFoundError } from '../errors.js';
+import { ConflictError, NotFoundError } from '../errors.js';
 import { assertSafeRepoNameShape } from '../name-validation.js';
 import { normalizeLookupText } from '../../util.js';
+import { chatHeaderWithIntegrity, chatLocation, parseChatDocument, parseChatJson } from './chat-record.js';
+import { registerSqlChatMove } from './chat-move.js';
+import { toSqlJsonPath } from './json-field-path.js';
 
 // MysqlTransaction — mysql2/promise port of SqliteTransaction. Same handler
 // surface and per-kind methods so Repos remain engine-agnostic. Differences
@@ -42,6 +45,9 @@ export class MysqlTransaction {
     async listResources(filter)  { return this._h(filter.kind, 'listResources').list(filter); }
 
     async putResourceIfMatch(key, expectedIntegrity, record) {
+        if (key.kind === 'chat' && expectedIntegrity === null) {
+            return { updated: await this._h('chat', 'putResourceIfMatch').put(key, record, { ifAbsent: true }) };
+        }
         const existing = await this.getResource(key);
         if (expectedIntegrity === null) {
             if (existing !== null) return { updated: false };
@@ -90,10 +96,10 @@ function chatKeyToParams(key) {
 export function registerChatHandler(tx) {
     const conn = tx._conn;
 
-    async function readRow(p) {
+    async function readRow(p, { lock = false } = {}) {
         const [rows] = await conn.execute(
-            `SELECT doc, integrity, updated_at, created_at
-             FROM chats WHERE handle=? AND char_dir=? AND name=? AND is_group=? AND group_id=?`,
+            `SELECT CAST(doc AS CHAR) AS doc, integrity, updated_at, created_at
+             FROM chats WHERE handle=? AND char_dir=? AND name=? AND is_group=? AND group_id=?${lock ? ' FOR UPDATE' : ''}`,
             [p.handle, p.char_dir, p.name, p.is_group, p.group_id],
         );
         return rows[0] || null;
@@ -104,10 +110,7 @@ export function registerChatHandler(tx) {
             const p = chatKeyToParams(key);
             const row = await readRow(p);
             if (!row) return null;
-            const parsed = coerceJson(row.doc);
-            if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
-            if (!parsed.header || typeof parsed.header !== 'object' || Array.isArray(parsed.header)) return null;
-            if (!Array.isArray(parsed.body)) return null;
+            const parsed = parseChatDocument(row.doc, key);
             return {
                 key,
                 header: parsed.header,
@@ -117,7 +120,7 @@ export function registerChatHandler(tx) {
                 createdAt: row.created_at,
             };
         },
-        async put(key, record) {
+        async put(key, record, { ifAbsent = false } = {}) {
             if (key.isGroup) {
                 assertSafeRepoNameShape(key.groupId ?? key.name, { field: 'chat.groupId' });
             } else {
@@ -125,19 +128,23 @@ export function registerChatHandler(tx) {
                 assertSafeRepoNameShape(key.name, { field: 'chat.name' });
             }
             const p = chatKeyToParams(key);
-            const headerWithIntegrity = {
-                ...record.header,
-                chat_metadata: {
-                    ...(record.header.chat_metadata ?? {}),
-                    integrity: record.integrity,
-                },
-            };
+            const headerWithIntegrity = chatHeaderWithIntegrity(record);
             const doc = JSON.stringify({ header: headerWithIntegrity, body: record.body });
             // Preserve existing created_at on upsert; only set fresh on first insert.
             const existing = await readRow(p);
             const now = Date.now();
             const updatedAt = record.updatedAt ?? now;
             const createdAt = record.createdAt ?? existing?.created_at ?? now;
+            if (ifAbsent) {
+                try {
+                    await conn.execute(`INSERT INTO chats (handle, char_dir, name, is_group, group_id, doc, updated_at, created_at)
+                                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, [p.handle, p.char_dir, p.name, p.is_group, p.group_id, doc, updatedAt, createdAt]);
+                    return true;
+                } catch (error) {
+                    if (error.code === 'ER_DUP_ENTRY') return false;
+                    throw error;
+                }
+            }
             await conn.execute(
                 `INSERT INTO chats (handle, char_dir, name, is_group, group_id, doc, updated_at, created_at)
                  VALUES (?, ?, ?, ?, ?, ?, ?, ?) AS new
@@ -196,19 +203,28 @@ export function registerChatHandler(tx) {
     });
 
     // Sidecar tx methods — direct on tx, matching SqliteTransaction surface.
-    tx.getChatState = async (chatKey, namespace) => {
+    tx.hasChatResource = async chatKey => {
+        const p = chatKeyToParams(chatKey);
+        const [rows] = await conn.execute('SELECT 1 FROM chats WHERE handle=? AND char_dir=? AND name=? AND is_group=? AND group_id=?', [p.handle, p.char_dir, p.name, p.is_group, p.group_id]);
+        return rows.length > 0;
+    };
+
+    tx.getChatState = async (chatKey, namespace, { required = false } = {}) => {
         const p = chatKeyToParams(chatKey);
         const [rows] = await conn.execute(
-            `SELECT doc FROM chat_states
+            `SELECT CAST(doc AS CHAR) AS doc FROM chat_states
              WHERE handle=? AND char_dir=? AND name=? AND is_group=? AND group_id=? AND namespace=?`,
             [p.handle, p.char_dir, p.name, p.is_group, p.group_id, namespace],
         );
         const row = rows[0];
-        if (!row) return null;
-        return coerceJson(row.doc);
+        if (!row) {
+            if (required) throw new Error(`Cannot read enumerated chat state at ${chatLocation(chatKey, namespace)}: row is missing`);
+            return null;
+        }
+        return parseChatJson(row.doc, chatLocation(chatKey, namespace));
     };
 
-    tx.putChatState = async (chatKey, namespace, doc) => {
+    tx.putChatState = async (chatKey, namespace, doc, { ifAbsent = false } = {}) => {
         const p = chatKeyToParams(chatKey);
         // Precheck parent exists so we raise a typed NotFoundError instead of
         // bubbling MySQL's raw FK error (ER_NO_REFERENCED_ROW_2).
@@ -222,6 +238,16 @@ export function registerChatHandler(tx) {
                 charDir: chatKey.charDir,
                 name: chatKey.name,
             });
+        }
+        if (ifAbsent) {
+            try {
+                await conn.execute(`INSERT INTO chat_states (handle, char_dir, name, is_group, group_id, namespace, doc)
+                                    VALUES (?, ?, ?, ?, ?, ?, ?)`, [p.handle, p.char_dir, p.name, p.is_group, p.group_id, namespace, JSON.stringify(doc)]);
+                return;
+            } catch (error) {
+                if (error.code === 'ER_DUP_ENTRY') throw new ConflictError('rename_target_exists', { ...chatKey, namespace });
+                throw error;
+            }
         }
         await conn.execute(
             `INSERT INTO chat_states (handle, char_dir, name, is_group, group_id, namespace, doc)
@@ -250,6 +276,24 @@ export function registerChatHandler(tx) {
         );
         return rows.map((r) => r.namespace);
     };
+
+    const params = key => { const p = chatKeyToParams(key); return [p.handle, p.char_dir, p.name, p.is_group, p.group_id]; };
+    const insertOnly = async (sql, values) => {
+        try { await conn.execute(sql, values); return true; } catch (error) {
+            if (error.code === 'ER_DUP_ENTRY') return false;
+            throw error;
+        }
+    };
+    registerSqlChatMove(tx, {
+        readParent: key => readRow(chatKeyToParams(key), { lock: true }),
+        readStates: async key => (await conn.execute(`SELECT namespace, CAST(doc AS CHAR) AS doc FROM chat_states
+            WHERE handle=? AND char_dir=? AND name=? AND is_group=? AND group_id=? FOR UPDATE`, params(key)))[0],
+        insertParent: (key, row) => insertOnly(`INSERT INTO chats (handle, char_dir, name, is_group, group_id, doc, updated_at, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, [...params(key), row.doc, row.updated_at, row.created_at]),
+        insertState: (key, state) => insertOnly(`INSERT INTO chat_states (handle, char_dir, name, is_group, group_id, namespace, doc)
+            VALUES (?, ?, ?, ?, ?, ?, ?)`, [...params(key), state.namespace, state.doc]),
+        deleteParent: key => conn.execute('DELETE FROM chats WHERE handle=? AND char_dir=? AND name=? AND is_group=? AND group_id=?', params(key)),
+    });
 }
 
 export function registerSettingsHandler(tx) {
@@ -259,6 +303,39 @@ export function registerSettingsHandler(tx) {
             const [rows] = await conn.execute('SELECT doc FROM settings WHERE handle=?', [key.handle]);
             if (!rows.length) return null;
             return coerceJson(rows[0].doc);
+        },
+        async getResourceField(key, segments) {
+            const path = toSqlJsonPath(segments);
+            const [rows] = await conn.execute(
+                'SELECT JSON_TYPE(JSON_EXTRACT(doc, ?)) AS type, JSON_EXTRACT(doc, ?) AS value FROM settings WHERE handle=?',
+                [path, path, key.handle],
+            );
+            if (!rows.length || rows[0].type == null) return { exists: false };
+            const type = String(rows[0].type).toLowerCase();
+            let value = rows[0].value;
+            if (type === 'null') value = null;
+            else if (type === 'boolean') value = value === true || value === 1 || value === '1' || value === 'true';
+            else if (type === 'object' || type === 'array') {
+                value = typeof value === 'string' ? JSON.parse(value) : value;
+            } else if (type === 'string') {
+                value = typeof value === 'string' && value.startsWith('"') ? JSON.parse(value) : value;
+            } else if (type === 'integer' || type === 'double' || type === 'decimal') {
+                value = Number(value);
+            }
+            return { exists: true, value, type };
+        },
+        async getResourceFieldType(key, segments) {
+            const path = toSqlJsonPath(segments);
+            const [rows] = await conn.execute(
+                'SELECT JSON_TYPE(JSON_EXTRACT(doc, ?)) AS type FROM settings WHERE handle=?',
+                [path, key.handle],
+            );
+            if (!rows.length || rows[0].type == null) return { exists: false };
+            const raw = String(rows[0].type).toLowerCase();
+            const type = raw === 'boolean' ? 'boolean'
+                : (raw === 'integer' || raw === 'double' || raw === 'decimal' ? 'number'
+                    : (raw === 'string' ? 'string' : raw));
+            return { exists: true, type };
         },
         async put(key, record) {
             await conn.execute(
@@ -273,6 +350,8 @@ export function registerSettingsHandler(tx) {
         },
         list() { throw new Error('MysqlTransaction.list: settings is a singleton'); },
     });
+    tx.getResourceField = (key, segments) => tx._h('settings', 'getResourceField').getResourceField(key, segments);
+    tx.getResourceFieldType = (key, segments) => tx._h('settings', 'getResourceFieldType').getResourceFieldType(key, segments);
 }
 
 function presetKeyToParams(key) {
@@ -367,6 +446,10 @@ export function registerPresetHandler(tx) {
         );
         return rows.map((r) => r.namespace);
     };
+    tx.listPresetStateRecords = async ({ handle, dirKey }) => {
+        const [rows] = await conn.execute('SELECT name, namespace FROM preset_states WHERE handle=? AND dir_key=? ORDER BY name, namespace', [handle, dirKey]);
+        return rows;
+    };
 }
 
 export function registerWorldInfoHandler(tx) {
@@ -452,6 +535,14 @@ export function registerWorldInfoHandler(tx) {
             });
         },
     });
+
+    tx.listWorldNames = async (handle) => {
+        const [rows] = await conn.execute(
+            'SELECT name FROM worlds WHERE handle=? ORDER BY name ASC',
+            [handle],
+        );
+        return rows.map((row) => row.name);
+    };
 
     // Returns the canonical world name (no extension) — what WorldInfoRepo.get/save expect.
     tx.resolveWorldName = async (key) => resolveCanonical(key.handle, key.name);

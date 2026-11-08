@@ -4,6 +4,7 @@
 // toolbar), not the hidden native <select>.
 
 import { test, expect } from '@playwright/test';
+import AdmZip from 'adm-zip';
 import { startServer, tearDownServer } from '../_lib/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded, writePreset } from '../_lib/fixtures.js';
@@ -125,6 +126,26 @@ test('undoing a batch delete keeps the preset that is active now active', async 
     expect(await page.evaluate(() => window.Luker.getContext().chatCompletionSettings.preset_settings_openai)).toBe(activeBefore);
 });
 
+test('clicking between two checkboxes ticks the row instead of switching presets', async ({ page }) => {
+    await awaitMainUI(page, server.baseURL);
+    await openPresetDropdown(page);
+
+    const activeBefore = await page.evaluate(() => window.Luker.getContext().chatCompletionSettings.preset_settings_openai);
+
+    await toggleRow(page, 'reef-notes');
+
+    // The click lands on the row's padding, a few pixels left of the
+    // checkbox's center: the near miss that used to select the option,
+    // switch presets and close the dropdown, dropping the batch selection.
+    const row = presetRow(page, 'reef-draft');
+    await row.click({ position: { x: 3, y: 3 } });
+
+    await expect(row.locator('.luker-action-select2-option__checkbox')).toBeChecked();
+    await expect(page.locator('.luker-bulk-delete-toolbar__count')).toContainText('2');
+    await expect(presetDropdown(page)).toBeVisible();
+    expect(await page.evaluate(() => window.Luker.getContext().chatCompletionSettings.preset_settings_openai)).toBe(activeBefore);
+});
+
 test('every row that offers a per-row delete also offers a bulk checkbox', async ({ page }) => {
     await awaitMainUI(page, server.baseURL);
     await openPresetDropdown(page);
@@ -169,6 +190,31 @@ test('select-all includes members of a collapsed group', async ({ page }) => {
 
     await page.locator('.luker-bulk-delete-toolbar__select-all').click();
     await expect(page.locator('.luker-bulk-delete-toolbar__count')).toContainText(`: ${rendered}`);
+});
+
+test('bulk export downloads a zip with one JSON file per ticked preset', async ({ page }, testInfo) => {
+    await awaitMainUI(page, server.baseURL);
+    await openPresetDropdown(page);
+
+    await toggleRow(page, 'reef-notes');
+    await toggleRow(page, 'reef-draft');
+
+    const downloadPromise = page.waitForEvent('download');
+    await page.locator('.luker-bulk-delete-toolbar__export').click();
+    const download = await downloadPromise;
+
+    expect(download.suggestedFilename()).toBe('presets.zip');
+
+    const downloadPath = testInfo.outputPath('presets.zip');
+    await download.saveAs(downloadPath);
+
+    const zip = new AdmZip(downloadPath);
+    const entries = zip.getEntries().map((entry) => entry.entryName).sort();
+    expect(entries).toEqual(['reef-draft.json', 'reef-notes.json']);
+
+    const exported = JSON.parse(zip.readAsText('reef-notes.json'));
+    expect(exported).toBeTruthy();
+    expect(exported.temperature).toBeDefined();
 });
 
 test('deleting the active preset leaves the picker and the runtime agreeing', async ({ page }) => {

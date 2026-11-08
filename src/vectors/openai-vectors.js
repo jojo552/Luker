@@ -1,7 +1,8 @@
 import fetch from 'node-fetch';
 import { SECRET_KEYS, readSecret } from '../endpoints/secrets.js';
 import { OPENROUTER_HEADERS } from '../constants.js';
-import { attachInspectionEndpoint } from '../request-inspector.js';
+import { attachInspectionEndpoint, getInspectionAbortSignal } from '../request-inspector.js';
+import { normalizeProviderBaseUrl } from '../util/base-url.js';
 
 const SOURCES = {
     'togetherai': {
@@ -112,9 +113,9 @@ export async function getOpenAIBatchVector(texts, source, directories, model = '
 
     let url;
     if (reverseProxy) {
-        url = reverseProxy.replace(/\/+$/, '');
+        url = normalizeProviderBaseUrl(source, reverseProxy);
     } else if (urlOverride) {
-        url = urlOverride.replace(/\/+$/, '');
+        url = normalizeProviderBaseUrl(source, urlOverride);
     } else {
         url = config.url?.replace('{{MODEL}}', modelName);
     }
@@ -143,6 +144,7 @@ export async function getOpenAIBatchVector(texts, source, directories, model = '
             ...config.headers,
         },
         body: JSON.stringify(body),
+        signal: getInspectionAbortSignal(request),
     });
 
     if (!response.ok) {

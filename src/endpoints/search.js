@@ -525,6 +525,25 @@ function normalizeZaiResults(raw, maxResults = 8) {
     return normalizeApiResults(raw?.search_result, { title: 'title', url: 'link', snippet: 'content' }, maxResults);
 }
 
+function buildDeepseekRequest({ query, maxResults, apiKey }) {
+    return {
+        url: 'https://api.deepseek.com/v1/tools/search',
+        init: {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+            body: JSON.stringify({ query, count: maxResults }),
+        },
+    };
+}
+
+function normalizeDeepseekResults(raw, maxResults = 8) {
+    return normalizeApiResults(raw?.results, {
+        title: 'title',
+        url: 'url',
+        snippet: (row) => row?.summary || row?.snippet || '',
+    }, maxResults);
+}
+
 async function fetchDdgResults({ query, maxResults, safeSearch, timeRange, region }) {
     const safeSearchMap = { off: '-2', moderate: '-1', strict: '1' };
     const timeRangeMap = { day: 'd', week: 'w', month: 'm', year: 'y' };
@@ -666,13 +685,24 @@ const SEARCH_ADAPTERS = {
     },
     zai: {
         async execute(ctx) {
-            const apiKey = readSecret(ctx.directories, SECRET_KEYS.ZAI);
+            const apiKey = readSecret(ctx.directories, SECRET_KEYS.ZAI_SEARCH);
             if (!apiKey) {
-                throw new HttpError(400, 'No Z.AI key found');
+                throw new HttpError(400, 'No Z.AI Search key found');
             }
             const { url, init } = buildZaiRequest({ ...ctx, apiKey });
             const raw = await fetchProviderJson(url, init, 'Z.AI');
             return { raw, results: normalizeZaiResults(raw, ctx.maxResults) };
+        },
+    },
+    deepseek: {
+        async execute(ctx) {
+            const apiKey = readSecret(ctx.directories, SECRET_KEYS.DEEPSEEK_SEARCH);
+            if (!apiKey) {
+                throw new HttpError(400, 'No DeepSeek Search key found');
+            }
+            const { url, init } = buildDeepseekRequest({ ...ctx, apiKey });
+            const raw = await fetchProviderJson(url, init, 'DeepSeek Search');
+            return { raw: null, results: normalizeDeepseekResults(raw, ctx.maxResults) };
         },
     },
 };
@@ -1242,4 +1272,6 @@ export {
     normalizeSerpapiResults,
     buildZaiRequest,
     normalizeZaiResults,
+    buildDeepseekRequest,
+    normalizeDeepseekResults,
 };

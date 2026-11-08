@@ -1,6 +1,7 @@
 import fetch from 'node-fetch';
 import { SECRET_KEYS, readSecret } from '../endpoints/secrets.js';
-import { attachInspectionEndpoint } from '../request-inspector.js';
+import { attachInspectionEndpoint, getInspectionAbortSignal } from '../request-inspector.js';
+import { normalizeProviderBaseUrl } from '../util/base-url.js';
 
 const DEFAULT_COHERE_URL = 'https://api.cohere.ai/v2';
 
@@ -31,7 +32,7 @@ export async function getCohereBatchVector(texts, isQuery, directories, model, s
         throw new Error('No API key found');
     }
 
-    const baseUrl = (reverseProxy || DEFAULT_COHERE_URL).replace(/\/+$/, '');
+    const baseUrl = normalizeProviderBaseUrl('cohere', reverseProxy || DEFAULT_COHERE_URL);
     const embedUrl = `${baseUrl}/embed`;
     const body = {
         texts: texts,
@@ -50,6 +51,7 @@ export async function getCohereBatchVector(texts, isQuery, directories, model, s
             Authorization: `Bearer ${key}`,
         },
         body: JSON.stringify(body),
+        signal: getInspectionAbortSignal(request),
     });
 
     if (!response.ok) {

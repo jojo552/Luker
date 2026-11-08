@@ -1,6 +1,7 @@
 import fetch from 'node-fetch';
 import { SECRET_KEYS, readSecret } from '../endpoints/secrets.js';
-import { attachInspectionEndpoint } from '../request-inspector.js';
+import { attachInspectionEndpoint, getInspectionAbortSignal } from '../request-inspector.js';
+import { normalizeProviderBaseUrl } from '../util/base-url.js';
 
 const DEFAULT_COHERE_URL = 'https://api.cohere.ai/v2';
 const DEFAULT_JINA_URL = 'https://api.jina.ai/v1';
@@ -61,7 +62,7 @@ async function rerankCohere(settings, query, documents, topK, directories, reque
         throw new Error('No Cohere API key found for reranking');
     }
 
-    const baseUrl = (reverseProxy || DEFAULT_COHERE_URL).replace(/\/+$/, '');
+    const baseUrl = normalizeProviderBaseUrl('cohere', reverseProxy || DEFAULT_COHERE_URL);
     const rerankUrl = `${baseUrl}/rerank`;
     const body = {
         model: settings.model || 'rerank-v3.5',
@@ -79,6 +80,7 @@ async function rerankCohere(settings, query, documents, topK, directories, reque
             'Authorization': `Bearer ${key}`,
         },
         body: JSON.stringify(body),
+        signal: getInspectionAbortSignal(request),
     });
 
     if (!response.ok) {
@@ -107,7 +109,7 @@ async function rerankJina(settings, query, documents, topK, directories, request
         throw new Error('No Jina API key found for reranking');
     }
 
-    const baseUrl = (reverseProxy || DEFAULT_JINA_URL).replace(/\/+$/, '');
+    const baseUrl = normalizeProviderBaseUrl('jina', reverseProxy || DEFAULT_JINA_URL);
     const rerankUrl = `${baseUrl}/rerank`;
     const body = {
         model: settings.model || 'jina-reranker-v2-base-multilingual',
@@ -125,6 +127,7 @@ async function rerankJina(settings, query, documents, topK, directories, request
             'Authorization': `Bearer ${key}`,
         },
         body: JSON.stringify(body),
+        signal: getInspectionAbortSignal(request),
     });
 
     if (!response.ok) {
@@ -149,7 +152,7 @@ async function rerankJina(settings, query, documents, topK, directories, request
  */
 async function rerankCustom(settings, query, documents, topK, directories, request = null) {
     const { reverseProxy, proxyPassword } = resolveTriplet(settings);
-    const apiUrl = reverseProxy || settings.apiUrl || '';
+    const apiUrl = normalizeProviderBaseUrl('custom_rerank', reverseProxy || settings.apiUrl || '');
     const apiKey = reverseProxy ? proxyPassword : (settings.apiKey || '');
 
     if (!apiUrl) {
@@ -183,6 +186,7 @@ async function rerankCustom(settings, query, documents, topK, directories, reque
         method: 'POST',
         headers: headers,
         body: JSON.stringify(body),
+        signal: getInspectionAbortSignal(request),
     });
 
     if (!response.ok) {
