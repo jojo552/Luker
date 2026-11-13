@@ -91,15 +91,6 @@ final class LukerRuntimeManager {
         applicationSupportRoot.appendingPathComponent(Self.persistentDataDirName, isDirectory: true)
     }
 
-    // MARK: - Same-origin policy
-
-    func isSameOriginURL(_ url: URL?) -> Bool {
-        guard let url, let base = URL(string: serverURL.absoluteString) else { return false }
-        return url.scheme?.lowercased() == base.scheme?.lowercased()
-            && url.host?.lowercased() == base.host?.lowercased()
-            && url.port == base.port
-    }
-
     // MARK: - Start
 
     func startIfNeeded() -> StartResult {
@@ -135,9 +126,17 @@ final class LukerRuntimeManager {
             let rawArguments = arguments.map { strdup($0) }
             defer { rawArguments.forEach { free($0) } }
             let cArguments: [UnsafePointer<CChar>?] = rawArguments.map { $0.map { UnsafePointer($0) } }
+            LukerDebugTrail.shared.append(
+                category: "native",
+                text: "node start requested port=\(selectedPort)"
+            )
             let exitCode = cArguments.withUnsafeBufferPointer { buffer in
                 luker_node_start(buffer.baseAddress, Int32(arguments.count))
             }
+            LukerDebugTrail.shared.append(
+                category: "native",
+                text: "node start returned code=\(exitCode) running=\(luker_node_is_running() ? 1 : 0)"
+            )
             if exitCode != 0 {
                 NSLog("[LukerRuntime] luker_node_start returned non-zero: %d", exitCode)
                 return StartResult(
@@ -153,6 +152,7 @@ final class LukerRuntimeManager {
             return StartResult(ok: true, error: nil)
         } catch {
             NSLog("[LukerRuntime] Failed to start runtime: %@", String(describing: error))
+            LukerDebugTrail.shared.append(category: "native", text: "runtime start failed: \(error)")
             return StartResult(ok: false, error: String(describing: error))
         }
     }
@@ -238,6 +238,10 @@ final class LukerRuntimeManager {
         let markerExists = FileManager.default.fileExists(atPath: markerFile.path)
         let currentMarker = markerExists ? try? String(contentsOf: markerFile, encoding: .utf8) : nil
         let needsRefresh = !markerExists || currentMarker != markerValue
+        LukerDebugTrail.shared.append(
+            category: "native",
+            text: "runtime prepare start refresh=\(needsRefresh) marker=\(markerValue)"
+        )
 
         if needsRefresh {
             if FileManager.default.fileExists(atPath: runtimeRoot.path) {
@@ -252,6 +256,7 @@ final class LukerRuntimeManager {
         }
 
         try prepareServerPluginsAlias(runtimeRoot: runtimeRoot, pluginsRoot: serverPluginsRoot)
+        LukerDebugTrail.shared.append(category: "native", text: "runtime prepare done")
 
         return RuntimePaths(
             runtimeRoot: runtimeRoot,

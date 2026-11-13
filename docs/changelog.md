@@ -4,6 +4,53 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 
 ## Unreleased
 
+### Fixes
+
+- Fixed Memory Graph LLM recall not drilling into always-inject event rollups.
+- Fixed Memory Graph RAG recall filtering always-inject nodes after the per-type quota.
+
+## v2.9.0-rc.2 (2026-11-11)
+
+### Connections & Models
+
+- Additional Parameters now applies to every chat completion source.
+- Fixed audio attachments for Gemini 4 models.
+
+### Image generation
+
+- Added AI Illustration, which generates illustrations for assistant messages automatically or on demand, with prompt presets and an image iteration studio.
+
+### Character Cards
+
+- Replacing a character card now renames the character and its chats to the new card name.
+
+### Client Apps
+
+- Added a **Check for pre-release updates** switch to User Settings, on by default.
+- Fixed the iOS, HarmonyOS and desktop apps not prompting for HTTP Basic authentication when the endpoint requires it.
+- Added a data directory setting that moves existing data and restarts the app when changed.
+
+### Android App
+
+- Fixed server plugin dependency installation failing on Android.
+- Fixed the Android app compiling frontend bundles at startup instead of using the bundles packaged in the APK.
+
+### iOS App
+
+- Added a startup-failure report on the next launch.
+- Fixed the missing scene configuration.
+- Fixed the iOS app showing the system background in the status bar and the bottom area instead of the interface theme.
+- Added the external link setting to the iOS app.
+- Fixed the iOS app showing a "No app can open this link" alert when a page loads an iframe.
+
+### Storage & Sync
+
+- Fixed extension updates failing when several updates run at the same time.
+
+**Full Changelog**: https://github.com/funnycups/Luker/compare/v2.9.0-rc.1...v2.9.0-rc.2
+
+## v2.9.0-rc.1 (2026-11-09)
+
 ### Server Plugins
 
 - Fixed Android server plugins failing to load host modules through relative paths.
@@ -78,6 +125,7 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 - Fixed LAN Sync on SQLite, MySQL, and PostgreSQL storage ignoring file-backed categories such as characters, and deleting them when database-backed categories synced.
 - Fixed deletions of worlds, chats, and other database-backed records not reaching the other device on SQLite, MySQL, and PostgreSQL storage.
 - Fixed LAN Sync between MySQL or PostgreSQL storage and SQLite or file storage reporting conflicts on identical worlds, presets, and other records.
+- Fixed the Docker image shipping without the SQLite native binding, which made switching the storage backend to SQLite fail.
 - Fixed the media deletion preview overflowing the screen.
 - The Clean-Up dialog now renders a category's items only when it is expanded, so large scan results no longer stall the page.
 - Fixed LAN Sync reporting success when the other device failed to write the changes, which could leave both devices out of sync.
@@ -156,6 +204,8 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 
 ### Background Keep-Alive
 
+- Added a picture-in-picture window that shows the character, the generation status and the reply as it streams.
+- Added a button that reopens picture-in-picture after the window closes during a generation.
 - Fixed picture-in-picture keep-alive failing to start on iOS.
 - Fixed the background keep-alive failing to exit after a generation ended.
 
@@ -188,6 +238,14 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 - Fixed state replay dropping full-replacement patches, which could lose stored extension data when a large change was saved.
 - Fixed the **Auth & Limits** admin tab rendering its fields centered and misaligned.
 - Fixed a click between two checkboxes in the multi-select pickers switching the active item.
+- Fixed takeover replies being dropped when a token estimate or a background generation overlaps.
+
+### New Contributors
+* @MCSeekeri made their first contribution in https://github.com/funnycups/Luker/pull/44
+* @AX995 made their first contribution in https://github.com/funnycups/Luker/pull/49
+* @Pixcj made their first contribution in https://github.com/funnycups/Luker/pull/53
+
+**Full Changelog**: https://github.com/funnycups/Luker/compare/v2.8.0...v2.9.0-rc.1
 
 ## v2.8.0 (2026-10-01)
 

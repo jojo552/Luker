@@ -135,6 +135,9 @@
             "whatwg-url": "^14.0.0"
         }
     },
+    "allowScripts": {
+        "better-sqlite3": true
+    },
     "name": "luker",
     "type": "module",
     "license": "AGPL-3.0",
@@ -142,7 +145,7 @@
         "type": "git",
         "url": "https://github.com/funnycups/Luker.git"
     },
-    "version": "2.8.0",
+    "version": "2.9.0-rc.2",
     "scripts": {
         "init": "node src/server-init.js",
         "start": "node server.js",
@@ -157,6 +160,7 @@
         "lint:plugin-imports": "node scripts/check-plugin-imports.js",
         "plugins:update": "node plugins update",
         "plugins:install": "node plugins install",
+        "storage:install-sqlite": "node scripts/install-sqlite.js",
         "storage:migrate": "node scripts/storage-migrate.js",
         "storage:audit-names": "node scripts/audit-storage-names.js"
     },

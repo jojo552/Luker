@@ -3934,11 +3934,9 @@ export async function createGenerationParameters(settings, model, type, messages
         generate_data.responses_url = settings.responses_url;
     }
 
-    if ([chat_completion_sources.CUSTOM, chat_completion_sources.DEEPSEEK, chat_completion_sources.CLAUDE, chat_completion_sources.OPENAI_RESPONSES].includes(settings.chat_completion_source)) {
-        generate_data.custom_include_body = substituteParams(settings.custom_include_body);
-        generate_data.custom_exclude_body = substituteParams(settings.custom_exclude_body);
-        generate_data.custom_include_headers = substituteParams(settings.custom_include_headers);
-    }
+    generate_data.custom_include_body = substituteParams(settings.custom_include_body);
+    generate_data.custom_exclude_body = substituteParams(settings.custom_exclude_body);
+    generate_data.custom_include_headers = substituteParams(settings.custom_include_headers);
 
     if (settings.chat_completion_source === chat_completion_sources.COHERE) {
         // Clamp to 0.01 -> 0.99
@@ -9321,6 +9319,7 @@ export function isAudioInliningSupported() {
         'gemini-2.0',
         'gemini-2.5',
         'gemini-3',
+        'gemini-4',
         'gemini-exp-1206',
         'gpt-4o-audio',
         'gpt-4o-realtime',

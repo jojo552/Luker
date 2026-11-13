@@ -17,6 +17,19 @@
             background-color: rgb(36, 36, 37);
         }
     </style>
+    <script>
+        // The iOS shell starts inside the safe area. A page that owns the
+        // safe-area padding opts into full-bleed layout so the theme background
+        // reaches the screen edges instead of the system background.
+        (() => {
+            const bridge = window.LukerIOS;
+            if (!bridge || typeof bridge.setFullBleed !== 'function') {
+                return;
+            }
+            document.documentElement.classList.add('luker-ios-full-bleed');
+            bridge.setFullBleed(true);
+        })();
+    </script>
     <link rel="preload" as="style" href="style.css">
     <link rel="manifest" crossorigin="use-credentials" href="manifest.json">
     <link href="webfonts/NotoSans/stylesheet.css" rel="stylesheet">
@@ -4179,7 +4192,7 @@
                         <div class="flex-container flex">
                             <div id="api_button_openai" class="api_button menu_button menu_button_icon" type="submit" data-i18n="Connect">Connect</div>
                             <div class="api_loading menu_button menu_button_icon" data-i18n="Cancel">Cancel</div>
-                            <div data-source="custom,deepseek,claude,openai_responses" id="customize_additional_parameters" class="menu_button menu_button_icon" data-i18n="Additional Parameters">Additional Parameters</div>
+                            <div id="customize_additional_parameters" class="menu_button menu_button_icon" data-i18n="Additional Parameters">Additional Parameters</div>
                             <div data-source="openrouter" class="menu_button menu_button_icon openrouter_authorize" title="Get your OpenRouter API token using OAuth flow. You will be redirected to openrouter.ai" data-i18n="Authorize;[title]Get your OpenRouter API token using OAuth flow. You will be redirected to openrouter.ai">Authorize</div>
                             <div id="test_api_button" class="menu_button menu_button_icon" title="Verifies your API connection by sending a short test message. Be aware that you'll be credited for it!" data-i18n="Test Message;[title]Verifies your API connection by sending a short test message. Be aware that you'll be credited for it!">Test Message</div>
                         </div>
@@ -5455,6 +5468,10 @@
                                 <label for="luker_open_external_links_in_browser" class="checkbox_label" title="Open external links in the system browser" data-i18n="[title]Open external links in the system browser">
                                     <input id="luker_open_external_links_in_browser" type="checkbox" />
                                     <small data-i18n="Open external links in the system browser">Open external links in the system browser</small>
+                                </label>
+                                <label for="luker_check_beta_updates" class="checkbox_label" title="Include beta and RC releases in update checks." data-i18n="[title]Include beta and RC releases in update checks.">
+                                    <input id="luker_check_beta_updates" type="checkbox" />
+                                    <small data-i18n="Check for pre-release updates">Check for pre-release updates</small>
                                 </label>
                             </div>
                         </div>
@@ -7811,6 +7828,7 @@
                             <div class="extraMesButtons">
                                 <div title="Translate message" class="mes_button mes_translate fa-solid fa-language" data-i18n="[title]Translate message"></div>
                                 <div title="Generate Image" class="mes_button sd_message_gen fa-solid fa-paintbrush" data-i18n="[title]Generate Image"></div>
+                                <div title="AI Illustration" class="mes_button sd_illustration_gen fa-solid fa-image" data-i18n="[title]sd_illustration_message_button"></div>
                                 <div title="Narrate" class="mes_button mes_narrate fa-solid fa-bullhorn" data-i18n="[title]Narrate"></div>
                                 <div title="Prompt" class="mes_button mes_prompt fa-solid fa-square-poll-horizontal " data-i18n="[title]Prompt" style="display: none;"></div>
                                 <div title="Exclude message from prompts" class="mes_button mes_hide fa-solid fa-eye" data-i18n="[title]Exclude message from prompts"></div>
